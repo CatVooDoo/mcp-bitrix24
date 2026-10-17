@@ -97,25 +97,31 @@ class OpenLinesPoller
             $messageText = trim((string)($messageData['text'] ?? ''));
             $authorId = (int)($messageData['author_id'] ?? 0);
             $userData = (array)($item['user'] ?? []);
-            $authorName = trim(($userData['name'] ?? '') . ' ' . ($userData['last_name'] ?? '')) ?: "Пользователь #{$authorId}";
+            if ($authorId === 0) {
+                $authorName = 'Система Битрикс24';
+            } else {
+                $authorName = trim(($userData['name'] ?? '') . ' ' . ($userData['last_name'] ?? '')) ?: "Пользователь #{$authorId}";
+            }
             $messageDate = (string)($messageData['date'] ?? '');
             $messageTimestamp = !empty($messageDate) ? strtotime($messageDate) : time();
             $timeElapsedSeconds = max(0, time() - $messageTimestamp);
 
             // Определение роли автора последнего сообщения
-            $isBot = ($botId > 0 && $authorId === $botId) || ($userData['is_bot'] ?? false);
-            $isExtranet = ($userData['extranet'] ?? false) || ($userData['external_auth_id'] ?? '') === 'imconnector';
-            
-            if ($isBot) {
+            $isBot = ($botId > 0 && $authorId === $botId) || ($userData['bot'] ?? false) || ($userData['is_bot'] ?? false);
+            $isConnector = ($userData['connector'] ?? false) || ($userData['external_auth_id'] ?? '') === 'imconnector';
+            $isExtranet = ($userData['extranet'] ?? false) || ($userData['type'] ?? '') === 'extranet';
+            $isEmployee = !empty($userData['departments']) || !empty($userData['work_position']) || ($userData['intranet_user'] ?? false);
+
+            if ($authorId === 0) {
+                $lastSpeaker = 'SYSTEM';
+            } elseif ($isBot) {
                 $lastSpeaker = 'BOT';
-            } elseif ($isExtranet || ($item['type'] ?? '') === 'lines') {
-                // Если автор не сотрудник Битрикс24 или тип диалога Открытая линия с внешним клиентом
-                $lastSpeaker = ($userData['work_position'] ?? '') === '' && ($userData['department'] ?? []) === [] ? 'CLIENT' : 'OPERATOR';
-                if ($authorId > 0 && empty($userData['work_position']) && empty($userData['departments'])) {
-                    $lastSpeaker = 'CLIENT';
-                }
-            } else {
+            } elseif ($isConnector || $isExtranet) {
+                $lastSpeaker = 'CLIENT';
+            } elseif ($isEmployee) {
                 $lastSpeaker = 'OPERATOR';
+            } else {
+                $lastSpeaker = 'CLIENT';
             }
 
             // Проверка новизны сообщения по кешу
@@ -138,6 +144,9 @@ class OpenLinesPoller
             } elseif ($lastSpeaker === 'OPERATOR') {
                 $status = 'OPERATOR_HANDLED';
                 $marker = 'OPERATOR_ACTIVE';
+            } elseif ($lastSpeaker === 'SYSTEM') {
+                $status = 'SYSTEM_EVENT';
+                $marker = 'SYSTEM_EVENT';
             }
 
             // Определение срочности (приоритета)
@@ -153,15 +162,18 @@ class OpenLinesPoller
                 }
             }
 
-            if ($unreadCount >= 3 || $timeElapsedSeconds >= 600) {
-                $isUrgent = true;
+            // Долгий срок ожидания или скопившиеся сообщения повышают приоритет только если ответа ожидает клиент
+            if (!$isUrgent && $needsAttention) {
+                if ($unreadCount >= 3 || $timeElapsedSeconds >= 600) {
+                    $isUrgent = true;
+                }
             }
 
             $priority = $isUrgent ? 'URGENT' : 'NORMAL';
 
-            // Привязки CRM из диалога
-            $entityData1 = (string)($item['entity_data_1'] ?? ($item['ENTITY_DATA_1'] ?? ''));
-            $entityData2 = (string)($item['entity_data_2'] ?? ($item['ENTITY_DATA_2'] ?? ''));
+            // Привязки CRM из диалога (проверяем chat.entity_data_* и верхнеуровневые entity_data_*)
+            $entityData1 = (string)($item['chat']['entity_data_1'] ?? ($item['entity_data_1'] ?? ($item['ENTITY_DATA_1'] ?? '')));
+            $entityData2 = (string)($item['chat']['entity_data_2'] ?? ($item['entity_data_2'] ?? ($item['ENTITY_DATA_2'] ?? '')));
             $crmBindings = CrmService::parseEntityData1($entityData1 . '|' . $entityData2);
 
             $dialogMeta = [
@@ -235,6 +247,7 @@ class OpenLinesPoller
             'UNANSWERED_CLIENT' => '🚨 [ОТКРЫТАЯ ЛИНИЯ: ТРЕБУЕТСЯ ОТВЕТ ИИ-АГЕНТА]',
             'BOT_REPLIED'       => 'ℹ️ [ОТКРЫТАЯ ЛИНИЯ: БОТ УЖЕ ОТВЕТИЛ, ОЖИДАНИЕ КЛИЕНТА]',
             'OPERATOR_ACTIVE'   => '👤 [ОТКРЫТАЯ ЛИНИЯ: РАБОТАЕТ ЖИВОЙ ОПЕРАТОР]',
+            'SYSTEM_EVENT'      => '⚙️ [ОТКРЫТАЯ ЛИНИЯ: СИСТЕМНОЕ СОБЫТИЕ]',
             default             => '💬 [ОТКРЫТАЯ ЛИНИЯ]',
         };
 
@@ -252,7 +265,9 @@ class OpenLinesPoller
             "[CHAT_ID: {$meta['chat_id']}]",
             "[UNREAD_MESSAGES: {$meta['unread_count']}]",
             "[WAITING_TIME: {$meta['waiting_time_human']}]",
-            "[CLIENT: {$meta['last_message']['author']} (ID: {$meta['last_message']['author_id']})]",
+            $meta['last_speaker'] === 'CLIENT'
+                ? "[CLIENT: {$meta['last_message']['author']} (ID: {$meta['last_message']['author_id']})]"
+                : "[LAST_SPEAKER_NAME: {$meta['last_message']['author']} (ID: {$meta['last_message']['author_id']}, ROLE: {$meta['last_speaker']})]",
             "[CRM_BINDINGS: " . json_encode($meta['crm_bindings'], JSON_UNESCAPED_UNICODE) . "]",
         ];
 

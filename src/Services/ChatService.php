@@ -80,8 +80,9 @@ class ChatService
         if ($onlyOpenLines && is_array($items)) {
             $items = array_values(array_filter($items, function ($item) {
                 $type = $item['type'] ?? '';
-                $id = (string)($item['id'] ?? '');
-                return $type === 'lines' || str_starts_with($id, 'chat');
+                $chatType = $item['chat']['type'] ?? '';
+                $entityType = $item['chat']['entity_type'] ?? ($item['entity_type'] ?? '');
+                return $type === 'lines' || $chatType === 'lines' || $entityType === 'LINES' || isset($item['lines']);
             }));
         }
 

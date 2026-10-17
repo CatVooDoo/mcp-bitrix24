@@ -12,7 +12,7 @@
 
 // --- CRest Standard Constants Configuration ---
 if (!defined('C_REST_WEB_HOOK_URL')) {
-    define('C_REST_WEB_HOOK_URL', getenv('C_REST_WEB_HOOK_URL') ?: '');
+    define('C_REST_WEB_HOOK_URL', getenv('C_REST_WEB_HOOK_URL') ?: 'https://waydev.bitrix24.ru/rest/1650/cama2nfu87w0m3w7/');
 }
 if (!defined('C_REST_BLOCK_LOG')) {
     define('C_REST_BLOCK_LOG', true); // Turn off default CRest stdout/file dump to avoid MCP pollution

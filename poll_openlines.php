@@ -121,6 +121,7 @@ foreach ($result['dialogs'] as $i => $d) {
         'UNANSWERED_CLIENT' => '🚨 ТРЕБУЕТСЯ ОТВЕТ',
         'BOT_REPLIED'       => 'ℹ️ БОТ ОТВЕТИЛ',
         'OPERATOR_ACTIVE'   => '👤 ОПЕРАТОР В СЕТИ',
+        'SYSTEM_EVENT'      => '⚙️ СИСТЕМА',
         default             => '💬 ДИАЛОГ',
     };
 
@@ -128,7 +129,14 @@ foreach ($result['dialogs'] as $i => $d) {
 
     echo "------------------------------------------------------------\n";
     echo "#{$num} [{$badge}] [{$prio}] {$d['dialog_id']} ({$d['title']})\n";
-    echo "Клиент: {$d['last_message']['author']} | Ожидание: {$d['waiting_time_human']} | Непрочитанных: {$d['unread_count']}\n";
+    $speakerLabel = match ($d['last_speaker']) {
+        'CLIENT'   => 'Клиент',
+        'OPERATOR' => 'Оператор',
+        'BOT'      => 'Бот',
+        'SYSTEM'   => 'Система',
+        default    => 'Автор',
+    };
+    echo "{$speakerLabel}: {$d['last_message']['author']} | Ожидание: {$d['waiting_time_human']} | Непрочитанных: {$d['unread_count']}\n";
     echo "CRM привязки: " . json_encode($d['crm_bindings'], JSON_UNESCAPED_UNICODE) . "\n";
     echo "Сообщение: \"{$d['last_message']['text']}\"\n";
 }
