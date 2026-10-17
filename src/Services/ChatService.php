@@ -99,6 +99,16 @@ class ChatService
             ];
         }
 
+        // Фиксация маркера отправленного ответа для защиты от эхо-петель в вебхуке
+        $normalizedDialogKey = preg_replace('/[^a-zA-Z0-9_\-]/', '', $normalizedDialogId);
+        $cacheDir = dirname(__DIR__, 2) . '/logs/cache';
+        if (is_dir($cacheDir)) {
+            @file_put_contents($cacheDir . "/last_bot_reply_{$normalizedDialogKey}.json", json_encode([
+                'timestamp' => time(),
+                'hash'      => md5(trim($message)),
+            ]), LOCK_EX);
+        }
+
         Logger::info("Message sent to {$normalizedDialogId}", [
             'message_id' => $response['result'] ?? null,
         ], 'chat');

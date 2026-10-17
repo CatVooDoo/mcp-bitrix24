@@ -34,7 +34,7 @@ if (empty($requestData)) {
 // 1. Валидация токена исходящего вебхука
 $expectedToken = defined('B24_OUTGOING_WEBHOOK_TOKEN') ? (string)B24_OUTGOING_WEBHOOK_TOKEN : '';
 if ($expectedToken !== '') {
-    $incomingToken = $requestData['auth']['application_token'] 
+    $incomingToken = $requestData['auth']['application_token']
         ?? ($requestData['application_token'] ?? '');
 
     if (!hash_equals($expectedToken, (string)$incomingToken)) {
@@ -54,15 +54,20 @@ $params = (array)($data['PARAMS'] ?? []);
 $user = (array)($data['USER'] ?? []);
 $chat = (array)($data['CHAT'] ?? []);
 
-// 2. Предотвращение зацикливания (игнорирование системных сообщений и собственных ответов бота)
+// 2. Предотвращение зацикливания (игнорирование системных сообщений, ботов и собственных ответов)
 $isSystem = ($params['SYSTEM'] ?? 'N') === 'Y';
+$isBotUser = ($user['IS_BOT'] ?? 'N') === 'Y';
 $authorId = (int)($params['FROM_USER_ID'] ?? ($params['AUTHOR_ID'] ?? ($user['ID'] ?? 0)));
 $botId = defined('B24_BOT_ID') ? (int)B24_BOT_ID : 0;
 
-if ($isSystem) {
-    Logger::debug('Ignoring system message in webhook', ['params' => $params], 'webhook');
+if ($isSystem || $isBotUser) {
+    Logger::debug('Ignoring system or bot message in webhook', [
+        'isSystem'  => $isSystem,
+        'isBotUser' => $isBotUser,
+        'authorId'  => $authorId,
+    ], 'webhook');
     http_response_code(200);
-    echo json_encode(['result' => 'ignored_system_message']);
+    echo json_encode(['result' => 'ignored_system_or_bot_message']);
     exit;
 }
 
@@ -76,7 +81,7 @@ if ($botId > 0 && $authorId === $botId) {
 // 3. Извлечение ключевых параметров диалога
 $chatId = (int)($params['TO_CHAT_ID'] ?? ($params['CHAT_ID'] ?? ($chat['ID'] ?? 0)));
 $dialogId = (string)($params['DIALOG_ID'] ?? ($chatId > 0 ? 'chat' . $chatId : ''));
-$message = (string)($params['MESSAGE'] ?? '');
+$message = trim((string)($params['MESSAGE'] ?? ''));
 $files = (array)($params['FILES'] ?? []);
 
 if ($chatId <= 0 && $dialogId === '') {
@@ -86,10 +91,34 @@ if ($chatId <= 0 && $dialogId === '') {
     exit;
 }
 
-// 4. Проверка дебаунсинга (если включена задержка/буферизация B24_DEBOUNCE_SECONDS)
+// Защита от эхо-петли при B24_BOT_ID = 0 (проверка маркера недавно отправленного ответа бота)
+$normalizedDialogKey = preg_replace('/[^a-zA-Z0-9_\-]/', '', $dialogId ?: ('chat' . $chatId));
+$selfReplyLockFile = __DIR__ . "/logs/cache/last_bot_reply_{$normalizedDialogKey}.json";
+if (file_exists($selfReplyLockFile)) {
+    $lastBotReply = json_decode((string)file_get_contents($selfReplyLockFile), true);
+    if (
+        is_array($lastBotReply)
+        && (time() - (int)($lastBotReply['timestamp'] ?? 0)) <= 10
+        && ($lastBotReply['hash'] ?? '') === md5($message)
+    ) {
+        Logger::debug('Ignoring echo of bot reply in webhook', ['dialogId' => $dialogId], 'webhook');
+        http_response_code(200);
+        echo json_encode(['result' => 'ignored_bot_echo']);
+        exit;
+    }
+}
+
+// Игнорируем пустые события без текста и без файлов
+if ($message === '' && empty($files)) {
+    http_response_code(200);
+    echo json_encode(['result' => 'ignored_empty_message']);
+    exit;
+}
+
+// 4. Проверка дебаунсинга (исправлен путь __DIR__ вместо dirname(__DIR__, 2))
 $debounceSeconds = defined('B24_DEBOUNCE_SECONDS') ? (int)B24_DEBOUNCE_SECONDS : 0;
 if ($debounceSeconds > 0 && $chatId > 0) {
-    $lockFile = dirname(__DIR__, 2) . "/logs/cache/debounce_{$chatId}.lock";
+    $lockFile = __DIR__ . "/logs/cache/debounce_{$chatId}.lock";
     $lastTime = file_exists($lockFile) ? (int)file_get_contents($lockFile) : 0;
     $now = time();
 
@@ -127,9 +156,14 @@ Logger::info("Processing webhook event {$event} for chat {$chatId}", [
     'message'  => mb_substr($message, 0, 100),
 ], 'webhook');
 
-// 6. Парсинг привязок к CRM из ENTITY_DATA_1
-$entityData1 = (string)($chat['ENTITY_DATA_1'] ?? '');
-$crmBindings = CrmService::parseEntityData1($entityData1);
+// 6. Парсинг привязок к CRM из PARAMS[CHAT_ENTITY_DATA_1/2] и CHAT[ENTITY_DATA_1/2]
+$combinedEntityData = implode('|', array_filter([
+    (string)($params['CHAT_ENTITY_DATA_1'] ?? ''),
+    (string)($params['CHAT_ENTITY_DATA_2'] ?? ''),
+    (string)($chat['ENTITY_DATA_1'] ?? ($chat['entity_data_1'] ?? '')),
+    (string)($chat['ENTITY_DATA_2'] ?? ($chat['entity_data_2'] ?? '')),
+]));
+$crmBindings = CrmService::parseEntityData1($combinedEntityData);
 
 // 7. Обогащение контекста: быстрый сбор Досье клиента через CrmService (1 batch запрос)
 $crmService = new CrmService();
@@ -143,17 +177,38 @@ $dossierResult = $crmService->getClientDossier([
 
 $clientDossier = $dossierResult['success'] ? ($dossierResult['dossier'] ?? null) : null;
 
-// 8. Отправка структурированного промпта и контекста в OpenClaw шлюз
+// 8. Формирование контекстного промпта для OpenClaw (чтобы модель видела dialog_id и досье)
+$authorName = trim(($user['NAME'] ?? '') . ' ' . ($user['LAST_NAME'] ?? '')) ?: "User #{$authorId}";
+$effectiveDialogId = $dialogId !== '' ? $dialogId : ('chat' . $chatId);
+$dossierJson = $clientDossier !== null
+    ? json_encode($clientDossier, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+    : 'не найдено (при необходимости используй b24_search_crm_by_comm или b24_get_chat_history)';
+
+$agentPrompt = implode("\n", array_filter([
+    "[ВХОДЯЩЕЕ СООБЩЕНИЕ BITRIX24]",
+    "dialog_id (для ответа через b24_chat_action): {$effectiveDialogId}",
+    "chat_id: {$chatId}",
+    "Автор: {$authorName} (ID: {$authorId})",
+    "Привязки CRM: " . json_encode($crmBindings, JSON_UNESCAPED_UNICODE),
+    "Авто-досье клиента (CRM + Договоры + Задачи): {$dossierJson}",
+    !empty($files) ? "Вложения: " . json_encode($files, JSON_UNESCAPED_UNICODE) : null,
+    "---",
+    "Текст сообщения клиента:",
+    $message !== '' ? $message : '[Сообщение без текста, прикреплен файл]',
+]));
+
+// 9. Отправка в OpenClaw шлюз
 $openClawUrl = defined('OPENCLAW_GATEWAY_URL') ? (string)OPENCLAW_GATEWAY_URL : '';
 $openClawToken = defined('OPENCLAW_HOOK_TOKEN') ? (string)OPENCLAW_HOOK_TOKEN : '';
 
 if ($openClawUrl !== '') {
     $openClawPayload = [
         'sessionKey'    => 'b24_chat_' . $chatId,
+        'message'       => $agentPrompt,
+        'rawMessage'    => $message,
         'event'         => $event,
         'chatId'        => $chatId,
-        'dialogId'      => $dialogId,
-        'message'       => $message,
+        'dialogId'      => $effectiveDialogId,
         'files'         => $files,
         'author'        => [
             'id'       => $authorId,
