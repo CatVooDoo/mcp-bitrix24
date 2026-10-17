@@ -1,0 +1,279 @@
+# ROLE & OBJECTIVE
+You are a Principal PHP Backend & AI-Integration Architect specializing in Bitrix24 REST API (`bitrix-tools/crest`), OpenClaw Agent integrations, and Model Context Protocol (MCP) servers on Ubuntu Linux (PHP 8.1+).
+
+Your task is to write a complete, production-ready **Bitrix24 MCP Server & Outgoing Webhook Gateway** in PHP using the official `CRest` library (`https://github.com/bitrix-tools/crest` and `https://apidocs.bitrix24.ru/`).
+Currently, the system operates in **Phase 1 (Chat Support Agent — Read-Only CRM/Tasks + Active Chat Control)** for an OpenClaw agent running on **DeepSeek V4.1 Flash**. However, the architecture MUST be modular and ready to scale to **Phase 2 (AI Project Manager / PM Agent)** without rewriting the core.
+
+---
+
+# CRITICAL NON-NEGOTIABLE CONSTRAINTS (READ CAREFULLY!)
+You are running as a Flash-tier model. You MUST NOT skip implementation details, use `// TODO` placeholders, or violate any of the following rules:
+
+1. **DO NOT MODIFY `CRest.php` (`crest.php`):**
+   - Assume `CRest.php` (from `https://github.com/bitrix-tools/crest`) is already present or placed in the root/core directory.
+   - Never alter its internal logic or methods (`CRest::call`, `CRest::callBatch`, etc.).
+   - Remember that the server runs on **Ubuntu Server (case-sensitive filesystem)**. Always check `file_exists(__DIR__ . '/CRest.php')` vs `crest.php` or consistently require `CRest.php`.
+
+2. **DO NOT MODIFY EXISTING LINES IN `settings.php`:**
+   - You are strictly forbidden from deleting or modifying existing standard CRest constants in `settings.php` (such as `C_REST_WEB_HOOK_URL`, `C_REST_LOGS_DIR`, `C_REST_BLOCK_LOG`, `C_REST_IGNORE_SSL`).
+   - You MAY ONLY **append new `define(...)` constants** to `settings.php` (with `if (!defined(...))` guards).
+
+3. **EXACT FILENAME `chatWeebhook.php`:**
+   - The entry point for Bitrix24 outgoing webhooks MUST be named **`chatWeebhook.php`** (with a double `e` — `chatWeebhook.php`). DO NOT "fix" or rename it to `chatWebhook.php`!
+
+4. **PHASE 1 ACCESS CONTROL (STRICT READ-ONLY FOR CRM & TASKS):**
+   - In Phase 1, the OpenClaw agent is ONLY allowed to **READ** information from:
+     - Leads (`crm.lead.list`, `crm.lead.get`)
+     - Deals (`crm.deal.list`, `crm.deal.get`)
+     - Companies (`crm.company.list`, `crm.company.get`)
+     - Contacts (`crm.contact.list`, `crm.contact.get`)
+     - Smart Process **"ДОГОВОРЫ" (Contracts)** (`crm.type.list`, `crm.item.list`, `crm.item.get`)
+     - Tasks, Task Comments, Task Results, and **Task Chats** (`tasks.task.list`, `tasks.task.get`, `task.commentitem.getlist`, `tasks.task.result.list`, `im.dialog.messages.get`)
+   - The agent MAY write/send messages ONLY to **Chats / OpenLines** (`imbot.message.add`, `im.message.add`, `imbot.chat.sendTyping`, `imopenlines.bot.session.operator`, `imopenlines.bot.session.transfer`).
+   - DO NOT expose any MCP tools that create, update, or delete Leads, Deals, Contacts, Companies, Contracts, or Tasks in Phase 1. Instead, create an isolated `src/Agents/PmAgentTools.php` stub class (disabled by default via constant `B24_ENABLE_PM_AGENT_TOOLS = false` in `settings.php`) to lay the architectural foundation for Phase 2.
+
+5. **ZERO STDOUT POLLUTION IN MCP:**
+   - In MCP (`stdio` or `HTTP JSON-RPC 2.0`), any stray PHP Notice/Warning or `CRest` debug output breaks JSON parsing.
+   - Configure PHP `ini_set('display_errors', '0')`, log all errors to `logs/mcp_error.log`, and ensure `C_REST_BLOCK_LOG` is set to `true` (or routed to `logs/crest/`).
+
+---
+
+# ARCHITECTURE & DIRECTORY STRUCTURE
+
+Generate the complete code for every file in the following structure (no omissions):
+
+```text
+project-root/
+├── CRest.php                          # (Reference only - DO NOT MODIFY)
+├── settings.php                       # Original CRest constants + appended new define() constants
+├── chatWeebhook.php                   # Outgoing webhook receiver from Bitrix24 -> OpenClaw Gateway
+├── mcp_server.php                     # Dual-mode MCP Server (supports CLI STDIO and HTTP POST JSON-RPC 2.0)
+├── src/
+│   ├── Core/
+│   │   ├── Bootstrap.php              # Safe loader for CRest.php, settings.php, error handling & logger
+│   │   ├── Logger.php                 # Structured JSON file logger (never writes to stdout)
+│   │   └── BitrixClient.php           # Wrapper over CRest::call & CRest::callBatch with error normalization
+│   ├── Services/
+│   │   ├── CrmService.php             # Read-only Leads, Deals, Contacts, Companies + unified Client Dossier
+│   │   ├── ContractService.php        # Read-only Smart Process "ДОГОВОРЫ" (auto-resolves entityTypeId)
+│   │   ├── TaskService.php            # Read-only Tasks + Task Comments + Task Results + Task Chat messages
+│   │   └── ChatService.php            # Read/Write Chat & OpenLines history, replies, operator transfer
+│   ├── Mcp/
+│   │   ├── McpRouter.php              # JSON-RPC 2.0 MCP protocol handler (initialize, tools/list, tools/call)
+│   │   ├── ChatAgentTools.php         # Active Phase 1 MCP Tools (Chat Agent)
+│   │   └── PmAgentTools.php           # Phase 2 Architectural Placeholder (PM Agent - disabled by flag)
+├── logs/                              # Directory for logs (.gitkeep)
+└── README.md                          # Complete documentation (in Russian)
+
+BITRIX24 REST API SPECIFICS YOU MUST IMPLEMENT CORRECTLY
+1. New Constants in settings.php
+Preserve existing constants (C_REST_WEB_HOOK_URL, etc.) and append ONLY new define() constants:
+
+B24_OUTGOING_WEBHOOK_TOKEN — application_token for verifying requests to chatWeebhook.php.
+
+B24_BOT_ID — ID of registered Bitrix24 bot (0 if sending as webhook user via im.message.add).
+
+B24_BOT_CLIENT_ID — CLIENT_ID of the bot (if applicable).
+
+B24_CONTRACTS_ENTITY_TYPE_ID — entityTypeId of the Smart Process "ДОГОВОРЫ" (if set to 0, ContractService must auto-discover it via crm.type.list by matching title Договор / ДОГОВОРЫ case-insensitively and cache it in a local JSON cache file).
+
+B24_PUBLIC_COMMENT_PREFIX — e.g., '[Публично]' (or '' if all comments are allowed; include a parameter in the tool so the agent or config controls whether internal developer comments are filtered).
+
+OPENCLAW_GATEWAY_URL — e.g., 'http://127.0.0.1:19001/hooks/agent'.
+
+OPENCLAW_HOOK_TOKEN — Bearer token for OpenClaw webhook authentication.
+
+MCP_HTTP_AUTH_TOKEN — Secret token if OpenClaw connects to mcp_server.php over HTTP.
+
+B24_DEBOUNCE_SECONDS — e.g., 0 or 5 (optional file-based lock/buffer in logs/cache/).
+
+B24_ENABLE_PM_AGENT_TOOLS — false (Phase 1 default).
+
+2. CRM Entities (CrmService.php)
+Leads (crm.lead.list, crm.lead.get): Fields are UPPER_CASE (ID, TITLE, NAME, LAST_NAME, STATUS_ID, COMPANY_ID, CONTACT_ID, ASSIGNED_BY_ID, OPPORTUNITY, CURRENCY_ID, DATE_CREATE, PHONE, EMAIL, UF_*).
+
+Deals (crm.deal.list, crm.deal.get): Fields are UPPER_CASE (ID, TITLE, STAGE_ID, CATEGORY_ID, COMPANY_ID, CONTACT_ID, ASSIGNED_BY_ID, OPPORTUNITY, CURRENCY_ID, BEGINDATE, CLOSEDATE, UF_*).
+
+Contacts (crm.contact.list, crm.contact.get): Fields are UPPER_CASE (ID, NAME, SECOND_NAME, LAST_NAME, POST, COMPANY_ID, ASSIGNED_BY_ID, PHONE, EMAIL, UF_*). Include a helper to search contacts/companies/leads by phone or email using crm.duplicate.findbycomm or filter.
+
+Companies (crm.company.list, crm.company.get): Fields are UPPER_CASE (ID, TITLE, COMPANY_TYPE, INDUSTRY, ASSIGNED_BY_ID, PHONE, EMAIL, WEB, UF_*).
+
+Unified Client Dossier (get_client_dossier via CRest::callBatch): Given contact_id, company_id, or chat_id, executes a single CRest::callBatch() to pull Contact, Company, active Deals, active Contracts ("ДОГОВОРЫ"), and recent 10 Tasks in under 300ms.
+
+3. Smart Process "ДОГОВОРЫ" (ContractService.php)
+CRITICAL API DIFFERENCE: Bitrix24 Smart Processes use crm.type.list, crm.item.list, and crm.item.get.
+
+Unlike old CRM methods, crm.item.list and crm.item.get require camelCase parameters and return camelCase fields inside result.items / result.item!
+
+Specifically:
+
+Pass entityTypeId (integer).
+
+Filter keys in crm.item.list: companyId, contactId, assignedById, stageId, id, %title.
+
+Select fields: ['id', 'title', 'stageId', 'categoryId', 'companyId', 'contactId', 'opportunity', 'currencyId', 'begindate', 'closedate', 'assignedById', 'createdTime', 'updatedTime', 'ufCrm*'].
+
+Implement auto-discovery of entityTypeId: if B24_CONTRACTS_ENTITY_TYPE_ID === 0, call crm.type.list, find the type where mb_stripos($type['title'], 'договор') !== false, cache the entityTypeId in logs/cache/contracts_entity_type.json, and use it for all subsequent calls.
+
+4. Tasks & Task Chats (TaskService.php)
+CRM Filter Prefix Rule: In tasks.task.list, the UF_CRM_TASK filter requires string prefixes:
+
+Lead: 'L_' . $leadId
+
+Contact: 'C_' . $contactId
+
+Company: 'CO_' . $companyId
+
+Deal: 'D_' . $dealId
+
+Response Key Casing: tasks.task.list and tasks.task.get return task fields in camelCase inside result['tasks'] or result['task'] (e.g., id, title, description, status, deadline, responsibleId, createdBy, groupId, chatId, ufCrmTask). Map status codes (2 => 'Ждет выполнения', 3 => 'В работе', 4 => 'Ждет контроля', 5 => 'Завершена', 6 => 'Отложена') into human-readable Russian strings alongside the raw code.
+
+Task Details + Task Chat (get_task_full_context):
+When the agent requests details on a specific task_id, fetch and combine 4 sources:
+
+tasks.task.get (taskId, select => ['*', 'UF_*', 'CHAT_ID']) — core task data + chatId.
+
+tasks.task.result.list (taskId) — official pinned results of the task.
+
+task.commentitem.getlist — CRITICAL: Pass parameters strictly as an ordered array [$taskId, ['POST_DATE' => 'ASC'], []] because TASKID must be the 1st argument in Bitrix24 REST API.
+
+Task Internal Chat (im.dialog.messages.get): In modern Bitrix24, tasks have a real-time chat attached (chatId field in task object). If !empty($task['chatId']), call im.dialog.messages.get with ['DIALOG_ID' => 'chat' . $task['chatId'], 'LIMIT' => 30] to retrieve messages from the task's chat!
+
+5. Outgoing Webhook Receiver (chatWeebhook.php)
+Receives POST requests (application/x-www-form-urlencoded or application/json) from Bitrix24 (ONIMBOTMESSAGEADD, ONIMBOTJOINCHAT, ONIMCOMMANDADD, ONIMMESSAGEADD, ONIMCONNECTORMESSAGEADD).
+
+Validates $_REQUEST['auth']['application_token'] against B24_OUTGOING_WEBHOOK_TOKEN (if configured).
+
+Ignores loop messages: skips messages where SYSTEM === 'Y' or messages sent by our own BOT_ID.
+
+Extracts:
+
+chatId (TO_CHAT_ID or CHAT_ID),
+
+dialogId (DIALOG_ID, e.g., chat123),
+
+message (MESSAGE),
+
+files (FILES),
+
+user (USER info),
+
+CRM bindings from CHAT['ENTITY_DATA_1'] (parses format Y|LEAD|10|COMPANY|45|CONTACT|120|DEAL|300 using regex to extract leadId, companyId, contactId, dealId).
+
+Immediately responds 200 OK to Bitrix24 using fastcgi_finish_request() (if PHP-FPM is available) so Bitrix24 webhook never times out, then:
+
+Enriches the payload via CrmService::getClientDossier() (1 fast CRest::callBatch call).
+
+Sends the structured prompt + JSON context to OpenClaw (OPENCLAW_GATEWAY_URL) with sessionKey: 'b24_chat_' . $chatId and Authorization: Bearer ....
+
+6. MCP Server (mcp_server.php & McpRouter.php)
+Implement a clean, dependency-free JSON-RPC 2.0 MCP Server that works in two modes automatically:
+
+CLI STDIO Mode (php mcp_server.php): Reads line-delimited JSON-RPC messages from STDIN and writes JSON-RPC responses to STDOUT (for local OpenClaw command execution on the same Ubuntu Server).
+
+HTTP Mode (POST /mcp_server.php): Reads JSON-RPC request from php://input, validates Authorization: Bearer <MCP_HTTP_AUTH_TOKEN>, and returns application/json (for HTTP MCP transport).
+
+Expose the following 11 MCP Tools in ChatAgentTools.php with strict JSON Schema (inputSchema):
+
+b24_get_client_dossier — Fast batch lookup of Contact, Company, Deals, Contracts ("ДОГОВОРЫ"), and recent Tasks by chat_id, company_id, contact_id, deal_id, or lead_id.
+
+b24_search_crm_by_comm — Find Leads, Contacts, and Companies by phone number or email (crm.duplicate.findbycomm).
+
+b24_get_leads — Search/read Leads (lead_id or filters company_id, contact_id, status_id, search_query).
+
+b24_get_deals — Search/read Deals (deal_id or filters company_id, contact_id, stage_id, category_id, search_query).
+
+b24_get_companies — Search/read Companies (company_id or search_query) including all custom UF_CRM_* fields.
+
+b24_get_contacts — Search/read Contacts (contact_id, company_id, or search_query).
+
+b24_get_contracts — Search/read Smart Process "ДОГОВОРЫ" (contract_id, company_id, contact_id, deal_id, or search_query).
+
+b24_get_tasks — List tasks filtered by CRM entity (company_id, contact_id, deal_id, lead_id), responsible_id, group_id, or status.
+
+b24_get_task_and_chat_details — Get full details of a specific task (task_id), including responsible user name, pinned results (tasks.task.result.list), classic comments (task.commentitem.getlist), and messages from the task's bound chat (im.dialog.messages.get).
+
+b24_get_chat_history — Read messages from any OpenLine or internal chat (dialog_id or chat_id, limit).
+
+b24_chat_action — Perform allowed chat actions: reply (send message to chat via imbot.message.add or im.message.add), typing (send typing indicator), or transfer_to_operator (post internal SYSTEM => 'Y' summary note and call imopenlines.bot.session.operator).
+
+OUTPUT REQUIREMENTS
+Write every single file in full with complete PHP 8.1+ type hints, try-catch blocks, and Russian docblocks/comments.
+
+Provide the complete README.md file in Russian covering:
+
+Architecture overview (Phase 1 Chat Agent & Phase 2 PM Agent roadmap).
+
+Required Bitrix24 Incoming Webhook scopes.
+
+Configuring settings.php (without modifying CRest.php).
+
+Configuring chatWeebhook.php with Nginx/PHP-FPM on Ubuntu Server.
+
+Connecting mcp_server.php (STDIO & HTTP) and chatWeebhook.php to OpenClaw (DeepSeek V4.1 Flash).
+
+
+---
+
+### 4. Готовый `README.md` для вашего проекта
+
+Вы можете сразу положить этот файл в корень проекта (или сверить с ним то, что сгенерирует Antigravity):
+
+```markdown
+# Bitrix24 CRest MCP Server & Webhook Gateway для OpenClaw
+
+Легковесный шлюз и MCP-сервер (Model Context Protocol) на **PHP 8.1+** и официальной библиотеке **[CRest](https://github.com/bitrix-tools/crest)** для интеграции ИИ-агента **OpenClaw (DeepSeek V4.1 Flash)** с порталом **Битрикс24**.
+
+Проект спроектирован с разделением на 2 этапа:
+* **Этап 1 (Текущий — Агент Чата / L1 Support):** Полное управление диалогами в чатах и Открытых линиях со **строгим Read-Only доступом** к CRM (Лиды, Сделки, Компании, Контакты, Смарт-процесс «ДОГОВОРЫ») и Задачам (включая чтение комментариев, результатов и встроенного чата задачи).
+* **Этап 2 (Заложен в архитектуру — ПМ-Агент):** Создание и маршрутизация задач, контроль дедлайнов, пинг разработчиков и управление воронками (`src/Mcp/PmAgentTools.php`).
+
+---
+
+## 1. Архитектурные ограничения и правила проекта
+
+1. **Неизменность ядра `CRest`:** Файл `CRest.php` используется «как есть» из официального репозитория `bitrix-tools/crest` и **не модифицируется**.
+2. **Правило `settings.php`:** Базовые константы `settings.php` не изменяются — конфигурация расширяется исключительно добавлением новых констант `define(...)` в конец файла.
+3. **Точка входа вебхуков чата:** Приемник исходящих событий от Битрикс24 располагается строго в файле `chatWeebhook.php`.
+4. **Безопасность данных (Guardrails):** На уровне MCP-сервера отсутствуют методы на запись/удаление сущностей CRM и Задач. Даже при наличии полных прав у входящего вебхука агент физически не может перезаписать сделку, удалить договор или изменить задачу.
+
+---
+
+## 2. Необходимые права (Scopes) Входящего вебхука в Битрикс24
+
+В разделе **Разработчикам → Другое → Входящий вебхук** создайте вебхук и выдайте следующие права:
+* `crm` — **CRM** (чтение Лидов, Сделок, Контактов, Компаний и Смарт-процесса «ДОГОВОРЫ»).
+* `task` и `tasks_extended` — **Задачи** (чтение карточек задач, результатов и комментариев).
+* `im` — **Чат и уведомления** (чтение истории чатов, чатов внутри задач и отправка сообщений).
+* `imbot` — **Создание и управление Чат-ботами** (ответы в чат от лица бота, индикатор набора текста).
+* `imopenlines` — **Открытые линии** (чтение сессий ОЛ и перевод диалога на живого оператора).
+* `user` — **Пользователи** (получение ФИО и должностей ответственных сотрудников по их ID).
+* `sonet_group` — **Рабочие группы** (получение названий проектов в задачах).
+* `disk` — **Диск** (чтение метаданных файлов, прикрепленных к чатам и задачам).
+
+---
+
+## 3. Конфигурация `settings.php`
+
+В ваш файл `settings.php` (рядом с `CRest.php`) добавьте следующие константы после стандартного `C_REST_WEB_HOOK_URL`:
+
+```php
+// --- Стандартные константы CRest ---
+define('C_REST_WEB_HOOK_URL', '[https://your-portal.bitrix24.ru/rest/1/your_secret_webhook/](https://your-portal.bitrix24.ru/rest/1/your_secret_webhook/)');
+define('C_REST_BLOCK_LOG', true); // Отключаем стандартный дамп в stdout для чистоты MCP
+define('C_REST_LOGS_DIR', __DIR__ . '/logs/crest/');
+
+// --- Дополнительные константы шлюза OpenClaw и MCP ---
+define('B24_OUTGOING_WEBHOOK_TOKEN', 'токен_исходящего_вебхука_или_бота');
+define('B24_BOT_ID', 0); // Укажите ID бота (если используете imbot) или 0 для отправки от имени вебхука
+define('B24_BOT_CLIENT_ID', '');
+define('B24_CONTRACTS_ENTITY_TYPE_ID', 0); // ID смарт-процесса "ДОГОВОРЫ" (0 = найти автоматически)
+define('B24_PUBLIC_COMMENT_PREFIX', ''); // Префикс публичных комментариев (например, '[Публично]')
+
+// Настройки связи с OpenClaw (DeepSeek V4.1 Flash)
+define('OPENCLAW_GATEWAY_URL', '[http://127.0.0.1:19001/hooks/agent](http://127.0.0.1:19001/hooks/agent)');
+define('OPENCLAW_HOOK_TOKEN', 'ваш_локальный_токен_openclaw');
+define('MCP_HTTP_AUTH_TOKEN', 'секретный_токен_для_http_mcp');
+
+// Архитектурный флаг Этапа 2 (ПМ-агент)
+define('B24_ENABLE_PM_AGENT_TOOLS', false);

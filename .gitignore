@@ -1,0 +1,10 @@
+/logs/*
+!/logs/.gitkeep
+!/logs/cache/
+/logs/cache/*
+!/logs/cache/.gitkeep
+!/logs/crest/
+/logs/crest/*
+!/logs/crest/.gitkeep
+*.log
+.DS_Store
