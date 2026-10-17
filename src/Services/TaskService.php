@@ -230,7 +230,33 @@ class TaskService
     }
 
     /**
-     * Получение полного контекста задачи (4 источника: карточка, результаты, комментарии, чат задачи).
+     * Получение пунктов чек-листа задачи (task.checklistitem.getlist).
+     * Важно: параметры передаются строго позиционно: [$taskId, ['SORT_INDEX' => 'ASC']].
+     */
+    public function getTaskChecklist(int $taskId): array
+    {
+        $response = $this->client->call('task.checklistitem.getlist', [
+            $taskId,
+            ['SORT_INDEX' => 'ASC'],
+        ]);
+
+        if (!$response['success']) {
+            return [
+                'success'   => false,
+                'error'     => $response['error'] ?? 'api_error',
+                'message'   => $response['error_description'] ?? 'Ошибка получения чек-листа задачи',
+                'checklist' => [],
+            ];
+        }
+
+        return [
+            'success'   => true,
+            'checklist' => $response['result'] ?? [],
+        ];
+    }
+
+    /**
+     * Получение полного контекста задачи (5 источников: карточка, чек-лист, результаты, комментарии, чат задачи).
      */
     public function getTaskFullContext(int $taskId, bool $onlyPublicComments = false): array
     {
@@ -245,15 +271,19 @@ class TaskService
 
         $task = $taskData['task'];
 
-        // 2. Результаты задачи
+        // 2. Чек-лист задачи
+        $checklistData = $this->getTaskChecklist($taskId);
+        $checklist = $checklistData['success'] ? ($checklistData['checklist'] ?? []) : [];
+
+        // 3. Результаты задачи
         $resultsData = $this->getTaskResults($taskId);
         $results = $resultsData['success'] ? ($resultsData['results'] ?? []) : [];
 
-        // 3. Комментарии
+        // 4. Комментарии
         $commentsData = $this->getTaskComments($taskId, $onlyPublicComments);
         $comments = $commentsData['success'] ? ($commentsData['comments'] ?? []) : [];
 
-        // 4. Встроенный чат задачи (если доступен chatId)
+        // 5. Встроенный чат задачи (если доступен chatId)
         $chatMessages = [];
         $chatId = $task['chatId'] ?? ($task['CHAT_ID'] ?? null);
         if (!empty($chatId)) {
@@ -267,6 +297,7 @@ class TaskService
             'success'      => true,
             'taskId'       => $taskId,
             'task'         => $task,
+            'checklist'    => $checklist,
             'results'      => $results,
             'comments'     => $comments,
             'chatMessages' => $chatMessages,
