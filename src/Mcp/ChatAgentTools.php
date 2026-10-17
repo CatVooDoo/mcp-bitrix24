@@ -208,6 +208,43 @@ class ChatAgentTools
                     ],
                 ],
             ],
+            [
+                'name'        => 'b24_create_task',
+                'description' => 'Постановка новой задачи в Битрикс24 по регламенту компании: 1. Название "<Группа проектов> | <Смысл задачи> <Дата DD.MM.YYYY>", 2. Описание с кратким планом действий, 3. Участники (responsible_id, accomplices, auditors), 4. Крайний срок (deadline), 5. Проектная группа (group_id), 6. Учет времени (time_estimate_hours / time_estimate_minutes).',
+                'inputSchema' => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'project_group_name'    => ['type' => 'string', 'description' => 'Пункт 1: Название проектной группы для заголовка (например, "HR", "DEV", "SALES")'],
+                        'task_summary'          => ['type' => 'string', 'description' => 'Пункт 1: Смысл задачи (например, "Заполнить документы по кандидату Андрей Высоцкий")'],
+                        'title'                 => ['type' => 'string', 'description' => 'Пункт 1: Полное название задачи, если передается сразу в формате "<Группа> | <Смысл> <DD.MM.YYYY>"'],
+                        'task_date'             => ['type' => 'string', 'description' => 'Пункт 1: Дата постановки (DD.MM.YYYY, по умолчанию текущая дата)'],
+                        'description'           => ['type' => 'string', 'description' => 'Пункт 2: Описание задачи. Обязательно должно содержать краткий план выполнения и/или ссылки на алгоритмы'],
+                        'plan_steps'            => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Пункт 2: Пункты краткого плана действий (список шагов)'],
+                        'links'                 => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Пункт 2: Ссылки на алгоритмы, регламенты и материалы'],
+                        'responsible_id'        => ['type' => 'integer', 'description' => 'Пункт 3: ID ответственного сотрудника (обязательно)'],
+                        'accomplices'           => ['type' => 'array', 'items' => ['type' => 'integer'], 'description' => 'Пункт 3: ID соисполнителей'],
+                        'auditors'              => ['type' => 'array', 'items' => ['type' => 'integer'], 'description' => 'Пункт 3: ID наблюдателей'],
+                        'deadline'              => ['type' => 'string', 'description' => 'Пункт 4: Крайний срок выполнения (ISO 8601 или YYYY-MM-DD HH:MM:SS, обязательно кроме задач-мануалов)'],
+                        'is_manual'             => ['type' => 'boolean', 'description' => 'Пункт 4: Флаг задачи-мануала (только мануалы могут не иметь дедлайна)'],
+                        'group_id'              => ['type' => 'integer', 'description' => 'Пункт 5: ID проектной группы (обязательно). Если не известен, воспользуйтесь b24_get_workgroups'],
+                        'time_estimate_hours'   => ['type' => 'number', 'description' => 'Пункт 6: Предварительные трудозатраты в часах (обязательно, например 1.5)'],
+                        'time_estimate_minutes' => ['type' => 'integer', 'description' => 'Пункт 6: Предварительные трудозатраты в минутах (например, 90)'],
+                        'crm_bindings'          => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Привязки к сущностям CRM (например, ["C_12", "D_34"])'],
+                    ],
+                    'required'   => ['responsible_id'],
+                ],
+            ],
+            [
+                'name'        => 'b24_get_workgroups',
+                'description' => 'Поиск и получение списка проектных рабочих групп Битрикс24 (sonet_group.get) для выбора group_id при постановке задачи.',
+                'inputSchema' => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'search_query' => ['type' => 'string', 'description' => 'Поиск группы по названию (например, "HR" или "Разработка")'],
+                        'limit'        => ['type' => 'integer', 'description' => 'Максимальное количество групп (по умолчанию 20)'],
+                    ],
+                ],
+            ],
         ];
     }
 
@@ -229,12 +266,25 @@ class ChatAgentTools
             'b24_get_chat_history'          => $this->executeGetChatHistory($arguments),
             'b24_chat_action'               => $this->executeChatAction($arguments),
             'b24_poll_openlines'            => $this->executePollOpenlines($arguments),
+            'b24_create_task'               => $this->executeCreateTask($arguments),
+            'b24_get_workgroups'            => $this->executeGetWorkgroups($arguments),
             default                         => [
                 'success' => false,
                 'error'   => 'tool_not_found',
                 'message' => "Инструмент {$toolName} не найден в ChatAgentTools.",
             ],
         };
+    }
+
+    private function executeCreateTask(array $args): array
+    {
+        return $this->taskService->createTask($args);
+    }
+
+    private function executeGetWorkgroups(array $args): array
+    {
+        $limit = isset($args['limit']) ? (int)$args['limit'] : 20;
+        return $this->taskService->getWorkgroups($args, $limit);
     }
 
     private function executePollOpenlines(array $args): array

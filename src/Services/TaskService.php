@@ -311,4 +311,314 @@ class TaskService
 
         return $b24Filter;
     }
+
+    /**
+     * Создание задачи в строгом соответствии с 6 пунктами регламента компании:
+     * 1. Название: "<Группа проектов> | <Смысл задачи> <Дата DD.MM.YYYY>"
+     * 2. Описание: Краткий план выполнения и/или ссылки на алгоритмы
+     * 3. Участники: RESPONSIBLE_ID (обяз.), ACCOMPLICES, AUDITORS
+     * 4. Крайний срок: DEADLINE (обяз., кроме задач-мануалов)
+     * 5. Проектная группа: GROUP_ID (обяз.)
+     * 6. Учет времени: ALLOW_TIME_TRACKING = 'Y' + TIME_ESTIMATE (секунды, обяз.)
+     */
+    public function createTask(array $data): array
+    {
+        // 1. Формирование названия задачи по регламенту
+        $title = $this->buildTaskTitle($data);
+        if ($title === '') {
+            return [
+                'success' => false,
+                'error'   => 'missing_title',
+                'message' => 'Не указано название задачи. По регламенту название состоит из 3 частей: "<Группа проектов> | <Смысл задачи> <Дата DD.MM.YYYY>".',
+            ];
+        }
+
+        // 3. Проверка ответственного
+        $responsibleId = (int)($data['responsible_id'] ?? 0);
+        if ($responsibleId <= 0) {
+            return [
+                'success' => false,
+                'error'   => 'missing_responsible_id',
+                'message' => 'Не указан ID ответственного сотрудника (responsible_id).',
+            ];
+        }
+
+        // 5. Проектная группа (Обязательно!)
+        $groupId = (int)($data['group_id'] ?? 0);
+        if ($groupId <= 0 && !empty($data['project_group_name'])) {
+            $groupId = $this->findGroupIdByName((string)$data['project_group_name']);
+        }
+        if ($groupId <= 0) {
+            return [
+                'success' => false,
+                'error'   => 'missing_group_id',
+                'message' => 'Обязательно необходимо выбрать проектную группу задачи (group_id). Если группа неизвестна, уточните у менеджера или воспользуйтесь поиском b24_get_workgroups.',
+            ];
+        }
+
+        // 4. Крайний срок выполнения (DEADLINE)
+        $isManual = !empty($data['is_manual']);
+        $deadline = !empty($data['deadline']) ? trim((string)$data['deadline']) : '';
+        if ($deadline === '' && !$isManual) {
+            return [
+                'success' => false,
+                'error'   => 'missing_deadline',
+                'message' => 'Согласно регламенту, необходимо указать крайний срок выполнения (deadline). Бессрочными могут быть только задачи-мануалы (укажите is_manual: true).',
+            ];
+        }
+
+        // 6. Учет времени и предварительные трудозатраты (Обязательно!)
+        $timeEstimateSeconds = $this->calculateTimeEstimateSeconds($data);
+        if ($timeEstimateSeconds <= 0) {
+            return [
+                'success' => false,
+                'error'   => 'missing_time_estimate',
+                'message' => 'Согласно регламенту, обязательно указать предварительные временные трудозатраты (time_estimate_hours или time_estimate_minutes/seconds).',
+            ];
+        }
+
+        // 2. Описание задачи и краткий план действий
+        $description = $this->buildTaskDescription($data);
+        if ($description === '') {
+            return [
+                'success' => false,
+                'error'   => 'missing_description_or_plan',
+                'message' => 'Согласно регламенту (пункт 2), описание задачи обязательно должно содержать краткий план действий по выполнению (plan_steps / description) и/или ссылки на алгоритмы (links).',
+            ];
+        }
+
+        // Формирование полей tasks.task.add
+        $fields = [
+            'TITLE'               => $title,
+            'DESCRIPTION'         => $description,
+            'RESPONSIBLE_ID'      => $responsibleId,
+            'GROUP_ID'            => $groupId,
+            'ALLOW_TIME_TRACKING' => 'Y',
+            'TIME_ESTIMATE'       => $timeEstimateSeconds,
+        ];
+
+        if ($deadline !== '') {
+            $fields['DEADLINE'] = $deadline;
+        }
+
+        if (!empty($data['created_by'])) {
+            $fields['CREATED_BY'] = (int)$data['created_by'];
+        }
+
+        if (!empty($data['accomplices']) && is_array($data['accomplices'])) {
+            $fields['ACCOMPLICES'] = array_map('intval', $data['accomplices']);
+        }
+
+        if (!empty($data['auditors']) && is_array($data['auditors'])) {
+            $fields['AUDITORS'] = array_map('intval', $data['auditors']);
+        }
+
+        // Привязки к CRM
+        $crmBindings = $this->collectCrmBindings($data);
+        if (!empty($crmBindings)) {
+            $fields['UF_CRM_TASK'] = $crmBindings;
+        }
+
+        if (isset($data['priority'])) {
+            $fields['PRIORITY'] = (int)$data['priority'];
+        }
+
+        Logger::info("Creating task according to регламент: {$title}", [
+            'responsible_id' => $responsibleId,
+            'group_id'       => $groupId,
+            'time_estimate'  => $timeEstimateSeconds,
+        ], 'tasks');
+
+        $response = $this->client->call('tasks.task.add', ['fields' => $fields]);
+        if (!$response['success']) {
+            Logger::error("Failed to create task {$title}", [
+                'error' => $response['error_description'] ?? $response['error'],
+            ], 'tasks');
+
+            return [
+                'success' => false,
+                'error'   => $response['error'] ?? 'api_error',
+                'message' => $response['error_description'] ?? 'Ошибка при создании задачи в Битрикс24',
+            ];
+        }
+
+        $taskId = (int)($response['result']['task']['id'] ?? ($response['result'] ?? 0));
+
+        Logger::info("Task created successfully with ID {$taskId}", ['title' => $title], 'tasks');
+
+        return [
+            'success'        => true,
+            'task_id'        => $taskId,
+            'title'          => $title,
+            'responsible_id' => $responsibleId,
+            'group_id'       => $groupId,
+            'time_estimate'  => $timeEstimateSeconds,
+            'deadline'       => $deadline,
+            'message'        => "Задача #{$taskId} успешно поставлена в соответствии с регламентом.",
+        ];
+    }
+
+    /**
+     * Поиск и получение проектных рабочих групп (sonet_group.get).
+     */
+    public function getWorkgroups(array $filter = [], int $limit = 50): array
+    {
+        $b24Filter = ['%ACTIVE' => 'Y'];
+        if (!empty($filter['search_query'])) {
+            $b24Filter['%NAME'] = (string)$filter['search_query'];
+        }
+        if (!empty($filter['id'])) {
+            $b24Filter['ID'] = (int)$filter['id'];
+        }
+
+        $params = [
+            'ORDER'  => ['NAME' => 'ASC'],
+            'FILTER' => $b24Filter,
+        ];
+
+        $response = $this->client->call('sonet_group.get', $params);
+        if (!$response['success']) {
+            return [
+                'success' => false,
+                'error'   => $response['error'] ?? 'api_error',
+                'message' => $response['error_description'] ?? 'Ошибка получения рабочих групп',
+                'groups'  => [],
+            ];
+        }
+
+        $groups = $response['result'] ?? [];
+        if ($limit > 0 && count($groups) > $limit) {
+            $groups = array_slice($groups, 0, $limit);
+        }
+
+        return [
+            'success' => true,
+            'groups'  => $groups,
+            'total'   => count($groups),
+        ];
+    }
+
+    /**
+     * Автопоиск ID группы по части названия.
+     */
+    public function findGroupIdByName(string $name): int
+    {
+        $res = $this->getWorkgroups(['search_query' => trim($name)], 10);
+        if (!$res['success'] || empty($res['groups'])) {
+            return 0;
+        }
+
+        $trimmed = mb_strtolower(trim($name));
+        foreach ($res['groups'] as $group) {
+            $groupName = mb_strtolower((string)($group['NAME'] ?? ''));
+            if ($groupName === $trimmed || mb_strpos($groupName, $trimmed) !== false) {
+                return (int)$group['ID'];
+            }
+        }
+
+        return (int)($res['groups'][0]['ID'] ?? 0);
+    }
+
+    /**
+     * Формирование названия задачи по регламенту:
+     * "<Группа проектов> | <Смысл задачи> <Дата постановки DD.MM.YYYY>"
+     */
+    private function buildTaskTitle(array $data): string
+    {
+        $dateStr = !empty($data['task_date']) ? trim((string)$data['task_date']) : date('d.m.Y');
+        $groupName = trim((string)($data['project_group_name'] ?? ''));
+        $taskSummary = trim((string)($data['task_summary'] ?? ''));
+
+        if ($groupName !== '' && $taskSummary !== '') {
+            return "{$groupName} | {$taskSummary} {$dateStr}";
+        }
+
+        $title = trim((string)($data['title'] ?? ''));
+        if ($title === '') {
+            return '';
+        }
+
+        // Если дата в формате DD.MM.YYYY еще не присутствует в конце названия, добавляем ее
+        if (!preg_match('/\b\d{2}\.\d{2}\.\d{4}\b$/', $title)) {
+            $title .= " {$dateStr}";
+        }
+
+        // Если нет разделителя группы и группа указана, добавляем
+        if (!str_contains($title, '|') && $groupName !== '') {
+            $title = "{$groupName} | {$title}";
+        }
+
+        return $title;
+    }
+
+    /**
+     * Сборка описания с кратким планом действий (Пункт 2 регламента).
+     */
+    private function buildTaskDescription(array $data): string
+    {
+        $description = trim((string)($data['description'] ?? ''));
+        $planSteps = (array)($data['plan_steps'] ?? []);
+
+        if (!empty($planSteps)) {
+            $planText = "\n\n### Краткий план действий:\n";
+            foreach ($planSteps as $i => $step) {
+                $num = $i + 1;
+                $planText .= "{$num}. {$step}\n";
+            }
+            $description .= $planText;
+        }
+
+        if (!empty($data['links']) && is_array($data['links'])) {
+            $linksText = "\n### Ссылки на алгоритмы и материалы:\n";
+            foreach ($data['links'] as $link) {
+                $linksText .= "- {$link}\n";
+            }
+            $description .= $linksText;
+        }
+
+        return $description;
+    }
+
+    /**
+     * Расчет предварительных трудозатрат в секундах (Пункт 6 регламента).
+     */
+    private function calculateTimeEstimateSeconds(array $data): int
+    {
+        if (isset($data['time_estimate_seconds']) && (int)$data['time_estimate_seconds'] > 0) {
+            return (int)$data['time_estimate_seconds'];
+        }
+
+        if (isset($data['time_estimate_hours']) && (float)$data['time_estimate_hours'] > 0) {
+            return (int)round((float)$data['time_estimate_hours'] * 3600);
+        }
+
+        if (isset($data['time_estimate_minutes']) && (int)$data['time_estimate_minutes'] > 0) {
+            return (int)$data['time_estimate_minutes'] * 60;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Сбор привязок к CRM.
+     */
+    private function collectCrmBindings(array $data): array
+    {
+        $bindings = (array)($data['crm_bindings'] ?? []);
+
+        if (!empty($data['lead_id'])) {
+            $bindings[] = 'L_' . (int)$data['lead_id'];
+        }
+        if (!empty($data['contact_id'])) {
+            $bindings[] = 'C_' . (int)$data['contact_id'];
+        }
+        if (!empty($data['company_id'])) {
+            $bindings[] = 'CO_' . (int)$data['company_id'];
+        }
+        if (!empty($data['deal_id'])) {
+            $bindings[] = 'D_' . (int)$data['deal_id'];
+        }
+
+        return array_values(array_unique(array_filter($bindings)));
+    }
 }

@@ -101,9 +101,14 @@ class McpRouter
     {
         $tools = $this->chatTools->getDefinitions();
 
-        // Если включен флаг Фазы 2, подмешиваем инструменты ПМ-агента
+        // Если включен флаг Фазы 2, подмешиваем инструменты ПМ-агента (без дубликатов по имени)
         if ($this->pmTools->isEnabled()) {
-            $tools = array_merge($tools, $this->pmTools->getDefinitions());
+            $existingNames = array_column($tools, 'name');
+            foreach ($this->pmTools->getDefinitions() as $pmTool) {
+                if (!in_array($pmTool['name'], $existingNames, true)) {
+                    $tools[] = $pmTool;
+                }
+            }
         }
 
         return [
