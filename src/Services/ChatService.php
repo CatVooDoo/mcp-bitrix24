@@ -54,6 +54,45 @@ class ChatService
     }
 
     /**
+     * Получение списка последних диалогов и открытых линий (im.recent.get).
+     *
+     * @param bool $onlyOpenLines Фильтровать только Открытые линии
+     * @param int $limit Ограничение выборки (по умолчанию 50)
+     * @return array Список диалогов со статусами, счетчиками непрочитанных и последними сообщениями
+     */
+    public function getRecentDialogs(bool $onlyOpenLines = true, int $limit = 50): array
+    {
+        $response = $this->client->call('im.recent.get', [
+            'SKIP_OPENLINES' => 'N',
+            'LIMIT'          => $limit,
+        ]);
+
+        if (!$response['success']) {
+            return [
+                'success' => false,
+                'error'   => $response['error'] ?? 'api_error',
+                'message' => $response['error_description'] ?? 'Ошибка получения списка недавних диалогов',
+                'items'   => [],
+            ];
+        }
+
+        $items = $response['result'] ?? [];
+        if ($onlyOpenLines && is_array($items)) {
+            $items = array_values(array_filter($items, function ($item) {
+                $type = $item['type'] ?? '';
+                $id = (string)($item['id'] ?? '');
+                return $type === 'lines' || str_starts_with($id, 'chat');
+            }));
+        }
+
+        return [
+            'success' => true,
+            'items'   => is_array($items) ? $items : [],
+            'total'   => is_array($items) ? count($items) : 0,
+        ];
+    }
+
+    /**
      * Отправка ответа в чат (imbot.message.add или im.message.add).
      *
      * @param string|int $dialogId Идентификатор диалога

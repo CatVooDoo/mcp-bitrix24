@@ -8,6 +8,7 @@ use Bitrix24Mcp\Services\CrmService;
 use Bitrix24Mcp\Services\ContractService;
 use Bitrix24Mcp\Services\TaskService;
 use Bitrix24Mcp\Services\ChatService;
+use Bitrix24Mcp\Services\OpenLinesPoller;
 use Bitrix24Mcp\Core\Logger;
 
 /**
@@ -19,7 +20,8 @@ class ChatAgentTools
         private readonly CrmService $crmService = new CrmService(),
         private readonly ContractService $contractService = new ContractService(),
         private readonly TaskService $taskService = new TaskService(),
-        private readonly ChatService $chatService = new ChatService()
+        private readonly ChatService $chatService = new ChatService(),
+        private readonly OpenLinesPoller $poller = new OpenLinesPoller()
     ) {}
 
     /**
@@ -194,6 +196,18 @@ class ChatAgentTools
                     'required'   => ['action', 'dialog_id'],
                 ],
             ],
+            [
+                'name'        => 'b24_poll_openlines',
+                'description' => 'Опрос активных сессий Открытых линий и чатов для выявления новых и неотвеченных сообщений клиентов с маркерами статуса ([STATUS: NEED_REPLY]) и срочности ([PRIORITY: URGENT]).',
+                'inputSchema' => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'limit'          => ['type' => 'integer', 'description' => 'Количество проверяемых диалогов (по умолчанию 30)'],
+                        'only_openlines' => ['type' => 'boolean', 'description' => 'Опрашивать только Открытые линии (по умолчанию true)'],
+                        'force'          => ['type' => 'boolean', 'description' => 'Игнорировать кеш ранее просмотренных сообщений (по умолчанию false)'],
+                    ],
+                ],
+            ],
         ];
     }
 
@@ -214,12 +228,18 @@ class ChatAgentTools
             'b24_get_task_and_chat_details' => $this->executeGetTaskDetails($arguments),
             'b24_get_chat_history'          => $this->executeGetChatHistory($arguments),
             'b24_chat_action'               => $this->executeChatAction($arguments),
+            'b24_poll_openlines'            => $this->executePollOpenlines($arguments),
             default                         => [
                 'success' => false,
                 'error'   => 'tool_not_found',
                 'message' => "Инструмент {$toolName} не найден в ChatAgentTools.",
             ],
         };
+    }
+
+    private function executePollOpenlines(array $args): array
+    {
+        return $this->poller->poll($args);
     }
 
     private function executeGetClientDossier(array $args): array
