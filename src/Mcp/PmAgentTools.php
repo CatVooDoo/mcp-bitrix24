@@ -182,7 +182,7 @@ class PmAgentTools
     {
         $res = $this->taskService->createTask($args);
 
-        if (!empty($res['success']) && !empty($res['task_id']) && !empty($args['checklist']) && is_array($args['checklist'])) {
+        if (!empty($res['success']) && !empty($res['task_id']) && !empty($args['checklist']) && is_array($args['checklist']) && empty($res['checklist'])) {
             $checklistRes = $this->addTaskChecklist([
                 'task_id' => (int)$res['task_id'],
                 'items'   => $args['checklist'],

@@ -99,16 +99,17 @@ class McpRouter
      */
     private function handleToolsList(array $params): array
     {
-        $tools = $this->chatTools->getDefinitions();
-
-        // Если включен флаг Фазы 2, подмешиваем инструменты ПМ-агента (без дубликатов по имени)
+        // Если включен режим ПМ-агента (Фаза 2), приоритет отдается его определениям
         if ($this->pmTools->isEnabled()) {
+            $tools = $this->pmTools->getDefinitions();
             $existingNames = array_column($tools, 'name');
-            foreach ($this->pmTools->getDefinitions() as $pmTool) {
-                if (!in_array($pmTool['name'], $existingNames, true)) {
-                    $tools[] = $pmTool;
+            foreach ($this->chatTools->getDefinitions() as $chatTool) {
+                if (!in_array($chatTool['name'], $existingNames, true)) {
+                    $tools[] = $chatTool;
                 }
             }
+        } else {
+            $tools = $this->chatTools->getDefinitions();
         }
 
         return [
@@ -128,20 +129,20 @@ class McpRouter
             throw new \InvalidArgumentException('Параметр name обязателен для tools/call', -32602);
         }
 
-        // 1. Поиск инструмента в ChatAgentTools (Фаза 1)
-        $chatToolDefinitions = array_column($this->chatTools->getDefinitions(), 'name');
-        if (in_array($toolName, $chatToolDefinitions, true)) {
-            $toolResult = $this->chatTools->execute($toolName, $arguments);
-            return $this->formatToolCallResult($toolResult);
-        }
-
-        // 2. Поиск инструмента в PmAgentTools (Фаза 2)
+        // 1. Поиск инструмента в PmAgentTools (Фаза 2), если включен
         if ($this->pmTools->isEnabled()) {
             $pmToolDefinitions = array_column($this->pmTools->getDefinitions(), 'name');
             if (in_array($toolName, $pmToolDefinitions, true)) {
                 $toolResult = $this->pmTools->execute($toolName, $arguments);
                 return $this->formatToolCallResult($toolResult);
             }
+        }
+
+        // 2. Поиск инструмента в ChatAgentTools (Фаза 1)
+        $chatToolDefinitions = array_column($this->chatTools->getDefinitions(), 'name');
+        if (in_array($toolName, $chatToolDefinitions, true)) {
+            $toolResult = $this->chatTools->execute($toolName, $arguments);
+            return $this->formatToolCallResult($toolResult);
         }
 
         throw new \InvalidArgumentException("Неизвестный инструмент: {$toolName}", -32601);

@@ -203,6 +203,7 @@ $agentPrompt = implode("\n", array_filter([
     "  5) Проектная группа (group_id, обязательна);",
     "  6) Учёт времени (time_estimate_hours / time_estimate_minutes).",
     "Если group_id неизвестен — найди через bitrix24__b24_get_workgroups или передай project_group_name.",
+    "Чек-лист: передавай пункты в параметре checklist при создании задачи (bitrix24__b24_create_task) или вызывай bitrix24__b24_add_task_checklist(task_id, items).",
     "---",
     "Текст сообщения клиента:",
     $message !== '' ? $message : '[Сообщение без текста, прикреплен файл]',

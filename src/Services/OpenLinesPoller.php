@@ -285,6 +285,7 @@ class OpenLinesPoller
         $lines[] = '  5) Проектная группа (group_id, обязательна);';
         $lines[] = '  6) Учёт времени (time_estimate_hours / time_estimate_minutes).';
         $lines[] = 'Если group_id неизвестен — найди через bitrix24__b24_get_workgroups или передай project_group_name.';
+        $lines[] = 'Чек-лист: передавай массив пунктов в параметре checklist при создании задачи (bitrix24__b24_create_task) или вызывай bitrix24__b24_add_task_checklist(task_id, items).';
 
         $lines[] = "---";
         $lines[] = "[ПОСЛЕДНЕЕ СООБЩЕНИЕ ДИАЛОГА]:";
