@@ -50,6 +50,7 @@ class OpenLinesPoller
      *   - 'limit' (int): Максимальное количество проверяемых диалогов (по умолчанию 30)
      *   - 'only_openlines' (bool): Опрашивать только Открытые линии (по умолчанию true)
      *   - 'force' (bool): Игнорировать кеш ранее просмотренных сообщений (по умолчанию false)
+     *   - 'line_id' (int|string): Опрашивать только диалоги конкретной Открытой линии (по entity_id)
      *   - 'min_wait_seconds' (int): Минимальное время ожидания ответа клиентом для повторного алерта
      * @return array Результаты опроса со статистикой и найденными диалогами
      */
@@ -59,11 +60,15 @@ class OpenLinesPoller
         $limit = isset($options['limit']) ? (int)$options['limit'] : 30;
         $onlyOpenlines = !isset($options['only_openlines']) || (bool)$options['only_openlines'];
         $force = !empty($options['force']);
+        $lineId = isset($options['line_id']) && (string)$options['line_id'] !== ''
+            ? (string)$options['line_id']
+            : '';
 
         Logger::info('Starting OpenLines poller run', [
             'forward'        => $forward,
             'limit'          => $limit,
             'only_openlines' => $onlyOpenlines,
+            'line_id'        => $lineId,
         ], 'poller');
 
         $recentRes = $this->chatService->getRecentDialogs($onlyOpenlines, $limit);
@@ -78,6 +83,19 @@ class OpenLinesPoller
         }
 
         $items = $recentRes['items'] ?? [];
+
+        // Фильтр по конкретной Открытой линии (entity_id вида "connector|<LINE_ID>|...")
+        if ($lineId !== '' && is_array($items)) {
+            $items = array_values(array_filter($items, function ($item) use ($lineId) {
+                $entityId = (string)($item['chat']['entity_id'] ?? ($item['entity_id'] ?? ''));
+                if ($entityId === '') {
+                    return false;
+                }
+                $parts = explode('|', $entityId);
+                return isset($parts[1]) && (string)$parts[1] === $lineId;
+            }));
+        }
+
         $lastSeen = $this->loadLastSeen();
         $detectedDialogs = [];
         $forwardedCount = 0;
@@ -289,6 +307,11 @@ class OpenLinesPoller
         $lines[] = "---";
         $lines[] = "[ПОСЛЕДНЕЕ СООБЩЕНИЕ ДИАЛОГА]:";
         $lines[] = $meta['last_message']['text'] !== '' ? $meta['last_message']['text'] : '[Вложение/системное событие]';
+        $lines[] = "---";
+        $lines[] = '[ИНСТРУКЦИЯ АГЕНТУ]: Ответь клиенту в этом чате через инструмент bitrix24__b24_chat_action ';
+        $lines[] = "(action=\"reply\", dialog_id=\"{$meta['dialog_id']}\"). Сначала при необходимости прочитай контекст через " .
+                   'bitrix24__b24_get_chat_history и досье через bitrix24__b24_get_client_dossier. ' .
+                   'Не отвечай в другие каналы, не дублируй уже отправленные ответы.';
 
         return implode("\n", $lines);
     }
@@ -316,6 +339,8 @@ class OpenLinesPoller
 
         $payload = [
             'sessionKey'    => 'b24_chat_' . $meta['chat_id'],
+            'sessionMode'   => 'persistent',
+            'agentId'       => 'main',
             'message'       => $meta['agent_prompt'],
             'rawMessage'    => $meta['last_message']['text'],
             'event'         => 'ONOPENLINESPOLL',
@@ -326,6 +351,7 @@ class OpenLinesPoller
             'priority'      => $meta['priority'],
             'crmContext'    => $meta['crm_bindings'],
             'clientDossier' => $dossierResult['success'] ? ($dossierResult['dossier'] ?? null) : null,
+            'deliver'       => false,
             'timestamp'     => time(),
         ];
 

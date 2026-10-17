@@ -7,7 +7,7 @@ declare(strict_types=1);
  * Скрипт автоматического опроса Открытых линий и чатов Битрикс24 (для Cron и автоматизаций OpenClaw).
  * 
  * Использование в CLI / Cron:
- *   php poll_openlines.php [--forward] [--limit=30] [--all] [--force] [--json]
+ *   php poll_openlines.php [--forward] [--limit=30] [--all] [--force] [--json] [--line=24]
  * 
  * Пример записи в crontab (каждую минуту):
  *   * * * * * php /var/www/html/poll_openlines.php --forward >> /var/www/html/logs/cron_poller.log 2>&1
@@ -29,7 +29,7 @@ $isCli = (php_sapi_name() === 'cli');
 // 1. Обработка параметров запуска (CLI vs HTTP)
 if ($isCli) {
     $shortopts = "f::l::a::j::h::";
-    $longopts  = ["forward::", "limit::", "all::", "force::", "json::", "help::"];
+    $longopts  = ["forward::", "limit::", "all::", "force::", "json::", "help::", "line::"];
     $options = getopt($shortopts, $longopts);
 
     if (isset($options['h']) || isset($options['help'])) {
@@ -41,6 +41,7 @@ if ($isCli) {
         echo "  --all, -a       Опрашивать все типы диалогов (по умолчанию только Открытые линии)\n";
         echo "  --force         Игнорировать кеш ранее просмотренных сообщений\n";
         echo "  --json, -j      Вывести результат в формате JSON\n";
+        echo "  --line=N        Опрашивать только диалоги Открытой линии с указанным ID\n";
         echo "  --help, -h      Показать данную справку\n";
         exit(0);
     }
@@ -49,6 +50,7 @@ if ($isCli) {
     $limit = (int)($options['limit'] ?? ($options['l'] ?? 30));
     $onlyOpenlines = !isset($options['all']) && !isset($options['a']);
     $force = isset($options['force']);
+    $lineId = (string)($options['line'] ?? '');
     $isJson = isset($options['json']) || isset($options['j']);
 } else {
     // Режим HTTP
@@ -78,6 +80,7 @@ if ($isCli) {
     $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 30;
     $onlyOpenlines = empty($_GET['all']) && empty($_POST['all']);
     $force = !empty($_GET['force']) || !empty($_POST['force']);
+    $lineId = (string)($_GET['line'] ?? ($_POST['line'] ?? ''));
     $isJson = true;
 }
 
@@ -88,6 +91,7 @@ $result = $poller->poll([
     'limit'          => $limit > 0 ? $limit : 30,
     'only_openlines' => $onlyOpenlines,
     'force'          => $force,
+    'line_id'        => $lineId,
 ]);
 
 // 3. Вывод результата
@@ -106,6 +110,9 @@ if (empty($result['success'])) {
     exit(1);
 }
 
+if ($lineId !== '') {
+    echo "Фильтр по линии: {$lineId}\n";
+}
 echo "Проверено диалогов: " . ($result['total_checked'] ?? 0) . "\n";
 echo "Обнаружено активных: " . ($result['detected_count'] ?? 0) . "\n";
 echo "Передано в OpenClaw: " . ($result['forwarded_count'] ?? 0) . "\n\n";

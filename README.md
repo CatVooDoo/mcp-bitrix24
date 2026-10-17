@@ -274,14 +274,22 @@ server {
 * `--all` (или `-a`) — опрашивать все типы чатов, а не только Открытые линии.
 * `--force` — принудительный опрос без учета кеша ранее просмотренных сообщений.
 * `--json` (или `-j`) — вывод данных в формате JSON.
+* `--line=N` — опрашивать только диалоги конкретной Открытой линии (ID линии из `imopenlines.config.list.get`, например `--line=24`).
 
 ### Запуск через автоматизацию OpenClaw (HTTP GET/POST)
 
 Скрипт также поддерживает вызов через HTTP-запросы из сценариев автоматизации OpenClaw:
 
 ```bash
-curl -X GET "https://b24-mcp.your-domain.com/poll_openlines.php?forward=1&token=ВАШ_MCP_HTTP_AUTH_TOKEN"
+curl -X GET "https://b24-mcp.your-domain.com/poll_openlines.php?forward=1&line=24&token=ВАШ_MCP_HTTP_AUTH_TOKEN"
 ```
+
+### Фильтр по конкретной Открытой линии
+
+Если агент должен обслуживать только одну линию, передайте её ID через `--line=N` (CLI) или `line=N` (HTTP).
+ID линии виден в `imopenlines.config.list.get` (поле `ID`), а в `im.recent.get` она соответствует
+второму сегменту `chat.entity_id` (формат `connector|<LINE_ID>|...`), например
+`telegrambot|24|1642658562|1644` — это линия `24` («ТЕСТ AI АГЕНТА ЧАТ С КЛИЕНТАМИ»).
 
 ---
 
