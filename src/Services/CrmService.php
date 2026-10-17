@@ -233,37 +233,104 @@ class CrmService
 
     /**
      * Поиск и фильтрация контактов (crm.contact.list).
+     * Поддерживает поиск по Имени (NAME), Фамилии (LAST_NAME) и полному ФИО.
      */
     public function getContacts(array $filter = [], int $limit = 20, array $order = ['ID' => 'DESC']): array
     {
-        $b24Filter = [];
+        $baseFilter = [];
         if (!empty($filter['id'])) {
-            $b24Filter['ID'] = (int)$filter['id'];
+            $baseFilter['ID'] = (int)$filter['id'];
         }
         if (!empty($filter['company_id'])) {
-            $b24Filter['COMPANY_ID'] = (int)$filter['company_id'];
+            $baseFilter['COMPANY_ID'] = (int)$filter['company_id'];
         }
         if (!empty($filter['assigned_by_id'])) {
-            $b24Filter['ASSIGNED_BY_ID'] = (int)$filter['assigned_by_id'];
+            $baseFilter['ASSIGNED_BY_ID'] = (int)$filter['assigned_by_id'];
         }
-        if (!empty($filter['search_query'])) {
-            $b24Filter['%NAME'] = $filter['search_query'];
+
+        $selectFields = [
+            'ID',
+            'NAME',
+            'SECOND_NAME',
+            'LAST_NAME',
+            'POST',
+            'COMPANY_ID',
+            'ASSIGNED_BY_ID',
+            'PHONE',
+            'EMAIL',
+            'UF_*',
+        ];
+
+        $searchQuery = trim((string)($filter['search_query'] ?? ''));
+
+        // Если задан текстовый поиск, ищем пакетно по LAST_NAME и NAME (т.к. в Б24 нет поля TITLE у контактов)
+        if ($searchQuery !== '') {
+            $parts = preg_split('/\s+/u', $searchQuery, -1, PREG_SPLIT_NO_EMPTY);
+            $batch = [
+                'by_last_name' => [
+                    'method' => 'crm.contact.list',
+                    'params' => [
+                        'filter' => array_merge($baseFilter, ['%LAST_NAME' => $searchQuery]),
+                        'select' => $selectFields,
+                        'order'  => $order,
+                    ],
+                ],
+                'by_name' => [
+                    'method' => 'crm.contact.list',
+                    'params' => [
+                        'filter' => array_merge($baseFilter, ['%NAME' => $searchQuery]),
+                        'select' => $selectFields,
+                        'order'  => $order,
+                    ],
+                ],
+            ];
+
+            if (is_array($parts) && count($parts) >= 2) {
+                $batch['by_full_1'] = [
+                    'method' => 'crm.contact.list',
+                    'params' => [
+                        'filter' => array_merge($baseFilter, ['%LAST_NAME' => $parts[0], '%NAME' => $parts[1]]),
+                        'select' => $selectFields,
+                        'order'  => $order,
+                    ],
+                ];
+                $batch['by_full_2'] = [
+                    'method' => 'crm.contact.list',
+                    'params' => [
+                        'filter' => array_merge($baseFilter, ['%NAME' => $parts[0], '%LAST_NAME' => $parts[1]]),
+                        'select' => $selectFields,
+                        'order'  => $order,
+                    ],
+                ];
+            }
+
+            $batchRes = $this->client->callBatch($batch);
+            $merged = [];
+            foreach (($batchRes['result'] ?? []) as $list) {
+                if (is_array($list)) {
+                    foreach ($list as $contact) {
+                        if (is_array($contact) && isset($contact['ID'])) {
+                            $merged[(int)$contact['ID']] = $contact;
+                        }
+                    }
+                }
+            }
+
+            $contacts = array_values($merged);
+            if ($limit > 0 && count($contacts) > $limit) {
+                $contacts = array_slice($contacts, 0, $limit);
+            }
+
+            return [
+                'success'  => true,
+                'contacts' => $contacts,
+                'total'    => count($contacts),
+            ];
         }
 
         $params = [
-            'filter' => $b24Filter,
-            'select' => [
-                'ID',
-                'NAME',
-                'SECOND_NAME',
-                'LAST_NAME',
-                'POST',
-                'COMPANY_ID',
-                'ASSIGNED_BY_ID',
-                'PHONE',
-                'EMAIL',
-                'UF_*',
-            ],
+            'filter' => $baseFilter,
+            'select' => $selectFields,
             'order'  => $order,
         ];
 
@@ -599,7 +666,7 @@ class CrmService
     }
 
     /**
-     * Извлечение связей с сущностями CRM из чата или сущности диалога.
+     * Извлечение связей с сущностями CRM из чата или сущности диалога (учитывает entity_data_1 и entity_data_2).
      */
     public function extractCrmBindingsFromChat(string|int $chatId): array
     {
@@ -610,11 +677,14 @@ class CrmService
             return [];
         }
 
-        $entityData = $response['result']['entity_data_1'] 
-            ?? $response['result']['ENTITY_DATA_1'] 
+        $entityData1 = $response['result']['entity_data_1']
+            ?? $response['result']['ENTITY_DATA_1']
+            ?? '';
+        $entityData2 = $response['result']['entity_data_2']
+            ?? $response['result']['ENTITY_DATA_2']
             ?? '';
 
-        return self::parseEntityData1((string)$entityData);
+        return self::parseEntityData1($entityData1 . '|' . $entityData2);
     }
 
     /**
