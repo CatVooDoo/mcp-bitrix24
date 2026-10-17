@@ -275,6 +275,17 @@ class OpenLinesPoller
             $lines[] = "[URGENT_TRIGGER_KEYWORD: '{$meta['matched_keyword']}']";
         }
 
+        $lines[] = "[ДЕЙСТВИЯ В ЧАТЕ]: Для ответа используй bitrix24__b24_chat_action (action=\"reply\", dialog_id=\"{$meta['dialog_id']}\", message=...).";
+        $lines[] = '[ПОСТАНОВКА ЗАДАЧ]: Инструмент bitrix24__b24_create_task ДОСТУПЕН — работа НЕ ограничена режимом «только чтение», создавать задачи разрешено.';
+        $lines[] = 'Регламент создания задачи (6 пунктов):';
+        $lines[] = '  1) Название: "<Группа проектов> | <Смысл задачи> <DD.MM.YYYY>" (или project_group_name + task_summary);';
+        $lines[] = '  2) Описание: обязателен краткий план действий (plan_steps) и/или ссылки (links);';
+        $lines[] = '  3) Ответственный (responsible_id, обязателен) + accomplices/auditors;';
+        $lines[] = '  4) Дедлайн (deadline, ISO 8601 или YYYY-MM-DD HH:MM:SS; без дедлайна только is_manual=true);';
+        $lines[] = '  5) Проектная группа (group_id, обязательна);';
+        $lines[] = '  6) Учёт времени (time_estimate_hours / time_estimate_minutes).';
+        $lines[] = 'Если group_id неизвестен — найди через bitrix24__b24_get_workgroups или передай project_group_name.';
+
         $lines[] = "---";
         $lines[] = "[ПОСЛЕДНЕЕ СООБЩЕНИЕ ДИАЛОГА]:";
         $lines[] = $meta['last_message']['text'] !== '' ? $meta['last_message']['text'] : '[Вложение/системное событие]';
