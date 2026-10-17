@@ -230,6 +230,7 @@ class ChatAgentTools
                         'time_estimate_hours'   => ['type' => 'number', 'description' => 'Пункт 6: Предварительные трудозатраты в часах (обязательно, например 1.5)'],
                         'time_estimate_minutes' => ['type' => 'integer', 'description' => 'Пункт 6: Предварительные трудозатраты в минутах (например, 90)'],
                         'crm_bindings'          => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Привязки к сущностям CRM (например, ["C_12", "D_34"])'],
+                        'checklist'             => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Пункты чек-листа задачи (добавляются автоматически после создания)'],
                     ],
                     'required'   => ['responsible_id'],
                 ],

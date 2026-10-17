@@ -475,6 +475,33 @@ class TaskService
 
         $taskId = (int)($response['result']['task']['id'] ?? ($response['result'] ?? 0));
 
+        $checklistResult = null;
+        if ($taskId > 0 && !empty($data['checklist']) && is_array($data['checklist'])) {
+            $checklistBatch = [];
+            $ci = 0;
+            foreach ($data['checklist'] as $item) {
+                $itemTitle = trim((string)$item);
+                if ($itemTitle === '') {
+                    continue;
+                }
+                $checklistBatch['item_' . $ci] = [
+                    'method' => 'task.checklistitem.add',
+                    'params' => [
+                        (int)$taskId,
+                        [
+                            'TITLE'       => (string)$item,
+                            'IS_COMPLETE' => 'N',
+                            'SORT_INDEX'  => ($ci + 1) * 10,
+                        ],
+                    ],
+                ];
+                $ci++;
+            }
+            if (!empty($checklistBatch)) {
+                $checklistResult = $this->client->callBatch($checklistBatch);
+            }
+        }
+
         Logger::info("Task created successfully with ID {$taskId}", ['title' => $title], 'tasks');
 
         return [
@@ -485,6 +512,7 @@ class TaskService
             'group_id'       => $groupId,
             'time_estimate'  => $timeEstimateSeconds,
             'deadline'       => $deadline,
+            'checklist'      => $checklistResult,
             'message'        => "Задача #{$taskId} успешно поставлена в соответствии с регламентом.",
         ];
     }
