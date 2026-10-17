@@ -61,8 +61,25 @@ class PmAgentTools
                         'time_estimate_hours'   => ['type' => 'number', 'description' => 'Пункт 6: Предварительные трудозатраты в часах (обязательно, например 1.5)'],
                         'time_estimate_minutes' => ['type' => 'integer', 'description' => 'Пункт 6: Предварительные трудозатраты в минутах (например, 90)'],
                         'crm_bindings'          => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Привязки к сущностям CRM (например, ["C_12", "D_34"])'],
+                        'checklist'             => ['type' => 'array', 'items' => ['type' => 'string'], 'description' => 'Пункты чек-листа задачи (добавляются автоматически после создания)'],
                     ],
                     'required'   => ['responsible_id'],
+                ],
+            ],
+            [
+                'name'        => 'b24_add_task_checklist',
+                'description' => '[Фаза 2: ПМ-Агент] Добавление пунктов чек-листа в задачу Битрикс24 (task.checklistitem.add).',
+                'inputSchema' => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'task_id' => ['type' => 'integer', 'description' => 'ID задачи'],
+                        'items'   => [
+                            'type'        => 'array',
+                            'items'       => ['type' => 'string'],
+                            'description' => 'Массив пунктов чек-листа',
+                        ],
+                    ],
+                    'required'   => ['task_id', 'items'],
                 ],
             ],
             [
@@ -146,13 +163,14 @@ class PmAgentTools
         }
 
         return match ($toolName) {
-            'b24_create_task'       => $this->createTask($arguments),
-            'b24_get_workgroups'    => $this->getWorkgroups($arguments),
-            'b24_update_task'       => $this->updateTask($arguments),
-            'b24_add_task_comment'  => $this->addTaskComment($arguments),
-            'b24_set_task_result'   => $this->setTaskResult($arguments),
-            'b24_update_deal_stage' => $this->updateDealStage($arguments),
-            default                 => [
+            'b24_create_task'        => $this->createTask($arguments),
+            'b24_add_task_checklist' => $this->addTaskChecklist($arguments),
+            'b24_get_workgroups'     => $this->getWorkgroups($arguments),
+            'b24_update_task'        => $this->updateTask($arguments),
+            'b24_add_task_comment'   => $this->addTaskComment($arguments),
+            'b24_set_task_result'    => $this->setTaskResult($arguments),
+            'b24_update_deal_stage'  => $this->updateDealStage($arguments),
+            default                  => [
                 'success' => false,
                 'error'   => 'tool_not_found',
                 'message' => "Инструмент {$toolName} не найден в PmAgentTools.",
@@ -162,7 +180,86 @@ class PmAgentTools
 
     private function createTask(array $args): array
     {
-        return $this->taskService->createTask($args);
+        $res = $this->taskService->createTask($args);
+
+        if (!empty($res['success']) && !empty($res['task_id']) && !empty($args['checklist']) && is_array($args['checklist'])) {
+            $checklistRes = $this->addTaskChecklist([
+                'task_id' => (int)$res['task_id'],
+                'items'   => $args['checklist'],
+            ]);
+            $res['checklist'] = $checklistRes;
+        }
+
+        return $res;
+    }
+
+    public function addTaskChecklist(array $args): array
+    {
+        $taskId = (int)($args['task_id'] ?? 0);
+        $items = isset($args['items']) && is_array($args['items']) ? $args['items'] : [];
+
+        if ($taskId <= 0) {
+            return [
+                'success' => false,
+                'error'   => 'missing_task_id',
+                'message' => 'Не указан ID задачи (task_id).',
+            ];
+        }
+
+        if (empty($items)) {
+            return [
+                'success' => false,
+                'error'   => 'empty_items',
+                'message' => 'Список пунктов чек-листа пуст.',
+            ];
+        }
+
+        $batch = [];
+        $i = 0;
+        foreach ($items as $item) {
+            $title = (string)$item;
+            if (trim($title) === '') {
+                continue;
+            }
+
+            $batch['cmd_' . $i] = [
+                'method' => 'task.checklistitem.add',
+                'params' => [
+                    (int)$taskId,
+                    [
+                        'TITLE'       => (string)$item,
+                        'IS_COMPLETE' => 'N',
+                        'SORT_INDEX'  => ($i + 1) * 10,
+                    ],
+                ],
+            ];
+            $i++;
+        }
+
+        if (empty($batch)) {
+            return [
+                'success' => false,
+                'error'   => 'empty_items',
+                'message' => 'Не передано ни одного непустого пункта чек-листа.',
+            ];
+        }
+
+        Logger::info("Adding checklist to task #{$taskId} via batch ({$i} items)", [
+            'task_id' => $taskId,
+            'count'   => $i,
+        ], 'pm_agent');
+
+        $res = $this->client->callBatch($batch);
+
+        return [
+            'success'      => $res['success'],
+            'taskId'       => $taskId,
+            'task_id'      => $taskId,
+            'count'        => $i,
+            'result'       => $res['result'] ?? null,
+            'result_error' => $res['result_error'] ?? null,
+            'error'        => $res['error_description'] ?? $res['error'] ?? null,
+        ];
     }
 
     private function getWorkgroups(array $args): array
