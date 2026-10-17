@@ -312,6 +312,17 @@ class OpenLinesPoller
         $lines[] = "(action=\"reply\", dialog_id=\"{$meta['dialog_id']}\"). Сначала при необходимости прочитай контекст через " .
                    'bitrix24__b24_get_chat_history и досье через bitrix24__b24_get_client_dossier. ' .
                    'Не отвечай в другие каналы, не дублируй уже отправленные ответы.';
+        $lines[] = '[ПОСТАНОВКА ЗАДАЧ]: Инструмент bitrix24__b24_create_task ДОСТУПЕН — работа НЕ ограничена ' .
+                   'режимом «только чтение», создавать задачи разрешено. Если клиент просит поставить задачу, ' .
+                   'используй bitrix24__b24_create_task строго по регламенту из 6 обязательных пунктов:';
+        $lines[] = '  1) Название: "<Группа проектов> | <Смысл задачи> <DD.MM.YYYY>" (либо раздельно project_group_name + task_summary);';
+        $lines[] = '  2) Описание: обязателен краткий план действий (plan_steps) и/или ссылки на регламенты (links);';
+        $lines[] = '  3) Ответственный (responsible_id, обязателен) + при необходимости accomplices/auditors;';
+        $lines[] = '  4) Дедлайн (deadline, ISO 8601 / YYYY-MM-DD HH:MM:SS; без дедлайна только задача-мануал с is_manual=true);';
+        $lines[] = '  5) Проектная группа (group_id, обязательна);';
+        $lines[] = '  6) Учёт времени и предварительные трудозатраты (time_estimate_hours или time_estimate_minutes).';
+        $lines[] = 'Если group_id неизвестен — найди проектную группу через bitrix24__b24_get_workgroups ' .
+                   '(search_query) или передай project_group_name для автопоиска. Не выдумывай group_id.';
 
         return implode("\n", $lines);
     }
