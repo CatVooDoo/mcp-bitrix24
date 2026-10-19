@@ -194,6 +194,34 @@ class TaskService
     }
 
     /**
+     * Добавление комментария к задаче (task.commentitem.add).
+     * Важно: параметры передаются позиционно: [$taskId, ['POST_MESSAGE' => $message]].
+     */
+    public function addComment(int $taskId, string $message): array
+    {
+        $response = $this->client->call('task.commentitem.add', [
+            $taskId,
+            ['POST_MESSAGE' => $message],
+        ]);
+
+        if (!$response['success']) {
+            Logger::error("Failed to add comment to task #{$taskId}", ['error' => $response['error_description'] ?? ''], 'tasks');
+            return [
+                'success' => false,
+                'error'   => $response['error'] ?? 'api_error',
+                'message' => $response['error_description'] ?? 'Ошибка добавления комментария к задаче',
+            ];
+        }
+
+        Logger::info("Comment added to task #{$taskId}", ['comment_id' => $response['result'] ?? null], 'tasks');
+
+        return [
+            'success'    => true,
+            'comment_id' => $response['result'] ?? null,
+        ];
+    }
+
+    /**
      * Получение сообщений встроенного чата задачи (im.dialog.messages.get).
      */
     public function getTaskChatMessages(int|string $chatId, int $limit = 30): array

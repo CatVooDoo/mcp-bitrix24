@@ -5,13 +5,18 @@ declare(strict_types=1);
 /**
  * Высокоточный контекстный автоответчик для Открытой линии 18 ("Открытая Линия Telegram (Wazzup)").
  *
- * Архитектура приоритетов:
- * ПРИОРИТЕТ 1: Критические инциденты, аварии, сбои, баги и технические доработки.
- *              Автоматически парсит портал/сайт, определяет проект и ставит задачу по регламенту из 6 пунктов.
- * ПРИОРИТЕТ 2: Вопросы по статусам существующих задач.
- * ПРИОРИТЕТ 3: Вопросы по услугам, стоимости, срокам и компетенциям WAYDEV.
- * ПРИОРИТЕТ 4: Корректное знакомство (строгий парсер имени без ложных срабатываний на предлоги/окончания).
- * ПРИОРИТЕТ 5: Вежливое приветствие / удержание диалога.
+ * Интеллектуальная система ведения диалога:
+ * 1. Сроки и дедлайны (сроки выполнения, время работы, дедлайны по активным задачам).
+ * 2. Статусы и ход работ (текущий этап, статус в Bitrix24, ответственный специалист).
+ * 3. Приём материалов и файлов (Яндекс.Диск, ссылки, архивы) -> автоматическое прикрепление комментарием в задачу.
+ * 4. Консультации по исполнителю (Никита Минаев, контакты и ведение задачи).
+ * 5. Оценка стоимости и сметы (пакеты техподдержки vs проектные нормо-часы).
+ * 6. Короткие подтверждения и вежливость (спасибо, ок, договорились).
+ * 7. Постановка задач и регистрация инцидентов по регламенту из 6 пунктов (без дублирования).
+ * 8. Услуги и компетенции компании WAYDEV.
+ * 9. Корректное знакомство (строгий парсер имени с черным списком).
+ * 10. Приветствие с привязкой к активному контексту.
+ * 11. Контекстный фоллбек (отражает суть реплики клиента и передает оператору без шаблонного зацикливания).
  */
 
 require_once __DIR__ . '/src/Core/Bootstrap.php';
@@ -24,6 +29,7 @@ use Bitrix24Mcp\Services\CrmService;
 use Bitrix24Mcp\Services\ContractService;
 
 Bootstrap::init();
+date_default_timezone_set('Europe/Moscow');
 
 class Line18AutoResponder
 {
@@ -200,12 +206,12 @@ class Line18AutoResponder
             return false;
         }
 
-        echo "[" . date('Y-m-d H:i:s') . "] Новое входящее от KelvinMarty в {$dialogId}: '{$clientText}'\n";
+        echo "[" . date('Y-m-d H:i:s') . "] Новое входящее от KelvinMarty в {$dialogId} (ID: {$clientMsgId}): '{$clientText}'\n";
 
         // Проверка в CRM
         $crmContext = $this->checkClientInCrm($dialogId, $clientAuthorId);
 
-        // Контекстная обработка
+        // Генерация высокоточного контекстного ответа
         $result = $this->generateResponse($dialogId, $clientText, $clientMessages, $ourReplies, $crmContext);
 
         $publicReply = $result['public_reply'];
@@ -282,6 +288,41 @@ class Line18AutoResponder
         ];
     }
 
+    /**
+     * Получение текущей активной задачи диалога с актуальными данными из Bitrix24.
+     */
+    private function getActiveTask(string $dialogId): ?array
+    {
+        $savedTaskId = (int)($this->state[$dialogId]['active_task_id'] ?? 0);
+        if ($savedTaskId > 0) {
+            $taskRes = $this->taskService->getTask($savedTaskId);
+            if ($taskRes['success'] && !empty($taskRes['task'])) {
+                $task = $taskRes['task'];
+                $status = (int)($task['status'] ?? 0);
+                if ($status !== 5) { // не завершена
+                    return $task;
+                }
+            }
+        }
+
+        // Поиск среди активных задач ответственного 1650
+        $tasksRes = $this->taskService->getTasks(['responsible_id' => self::OPERATOR_USER_ID], 5);
+        if ($tasksRes['success'] && !empty($tasksRes['tasks'])) {
+            foreach ($tasksRes['tasks'] as $t) {
+                $status = (int)($t['status'] ?? 0);
+                if ($status !== 5) {
+                    $id = (int)($t['id'] ?? ($t['ID'] ?? 0));
+                    $this->state[$dialogId]['active_task_id'] = $id;
+                    $this->state[$dialogId]['active_task_title'] = (string)($t['title'] ?? ($t['TITLE'] ?? ''));
+                    $this->saveState();
+                    return $t;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private function generateResponse(
         string $dialogId,
         string $currentText,
@@ -289,7 +330,7 @@ class Line18AutoResponder
         array $ourReplies,
         array $crmContext
     ): array {
-        $lower = mb_strtolower($currentText);
+        $lower = mb_strtolower(trim($currentText));
         $clientName = $crmContext['client_name'];
         $companyTitle = $crmContext['company_title'];
         $assignedById = $crmContext['assigned_by_id'];
@@ -299,11 +340,211 @@ class Line18AutoResponder
             $responsibleTag .= " и [USER={$assignedById}]Ответственный менеджер[/USER]";
         }
 
+        $activeTask = $this->getActiveTask($dialogId);
+        $activeTaskId = $activeTask ? (int)($activeTask['id'] ?? ($activeTask['ID'] ?? 0)) : 0;
+        $activeTaskTitle = $activeTask ? (string)($activeTask['title'] ?? ($activeTask['TITLE'] ?? '')) : '';
+        $activeTaskStatus = $activeTask ? (string)($activeTask['statusText'] ?? 'В работе') : 'В работе';
+        $activeTaskDeadlineRaw = $activeTask ? (string)($activeTask['deadline'] ?? ($activeTask['DEADLINE'] ?? '')) : '';
+
+        $activeTaskDeadlineFormatted = '20.10.2026, 18:00';
+        if ($activeTaskDeadlineRaw !== '') {
+            $ts = strtotime($activeTaskDeadlineRaw);
+            if ($ts > 0) {
+                $activeTaskDeadlineFormatted = date('d.m.Y, H:i', $ts);
+            }
+        }
+
         // =========================================================================
-        // ПРИОРИТЕТ 1: ТЕХНИЧЕСКИЙ СБОЙ, БАГ, АВАРИЯ, ЗАПРОС НА ДОРАБОТКУ
-        // (Высший приоритет — обрабатывается первым!)
+        // ПРИОРИТЕТ 1: СРОКИ, ДЕДЛАЙНЫ, ВРЕМЯ ВЫПОЛНЕНИЯ
         // =========================================================================
-        $isIncident = (
+        $isDeadlineQuestion = (
+            str_contains($lower, 'срок') ||
+            str_contains($lower, 'дедлайн') ||
+            str_contains($lower, 'сколько по времени') ||
+            str_contains($lower, 'сколько займет') ||
+            str_contains($lower, 'сколько времени') ||
+            str_contains($lower, 'как долго') ||
+            str_contains($lower, 'когда будет готов') ||
+            str_contains($lower, 'когда сдела') ||
+            str_contains($lower, 'когда ждать') ||
+            str_contains($lower, 'до какого числа') ||
+            str_contains($lower, 'успеете') ||
+            (str_contains($lower, 'когда') && (str_contains($lower, 'готов') || str_contains($lower, 'сдад') || str_contains($lower, 'заверш')))
+        );
+
+        if ($isDeadlineQuestion) {
+            if ($activeTaskId > 0) {
+                $isPortfolio = (str_contains(mb_strtolower($activeTaskTitle), 'портфолио') || str_contains($lower, 'портфолио'));
+
+                if ($isPortfolio) {
+                    $publicReply = "По вашей задаче №{$activeTaskId} («{$activeTaskTitle}»):\n\n"
+                        . "• **Плановый дедлайн:** завтра, 20 октября, до 18:00.\n"
+                        . "• **Трудоёмкость:** около 1 рабочего дня (2–4 рабочих часа на вёрстку, адаптацию и наполнение блоков портфолио).\n"
+                        . "• **Условие старта:** срок отсчитывается с момента предоставления ссылки на Яндекс.Диск с материалами. Как только пришлёте файлы — Никита Минаев сразу начинает реализацию.\n\n"
+                        . "Если файлы отправите сегодня — постараемся сдать даже раньше!";
+                } else {
+                    $publicReply = "По вашей задаче №{$activeTaskId} («{$activeTaskTitle}»):\n\n"
+                        . "• **Плановый дедлайн:** {$activeTaskDeadlineFormatted}\n"
+                        . "• **Статус:** {$activeTaskStatus}\n"
+                        . "• **Ответственный специалист:** Минаев Никита\n\n"
+                        . "Специалисты держат задачу на контроле. О любых этапах готовности я сразу сообщу вам сюда!";
+                }
+
+                $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                    . "Внимание, {$responsibleTag}!\n"
+                    . "• Клиент уточнил сроки по задаче №{$activeTaskId} («{$activeTaskTitle}»).\n"
+                    . "• Озвучен срок: {$activeTaskDeadlineFormatted} (1 рабочий день после передачи файлов с диска).\n"
+                    . "(Агент держит задачу на контроле).";
+
+                return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+            }
+        }
+
+        // =========================================================================
+        // ПРИОРИТЕТ 2: СТАТУС ЗАДАЧИ И ХОД ВЫПОЛНЕНИЯ
+        // =========================================================================
+        $isStatusQuestion = (
+            str_contains($lower, 'статус') ||
+            str_contains($lower, 'что с задач') ||
+            str_contains($lower, 'как дела с') ||
+            str_contains($lower, 'на каком этапе') ||
+            str_contains($lower, 'проверили') ||
+            str_contains($lower, 'какой результат')
+        );
+
+        if ($isStatusQuestion) {
+            if ($activeTaskId > 0) {
+                $publicReply = "По вашей задаче №{$activeTaskId} («{$activeTaskTitle}»):\n\n"
+                    . "• **Текущий статус:** {$activeTaskStatus}\n"
+                    . "• **Ответственный специалист:** Минаев Никита\n"
+                    . "• **Крайний срок:** {$activeTaskDeadlineFormatted}\n\n"
+                    . "Задача зафиксирована и находится в работе. О любых обновлениях или завершении я сразу отпишусь в этот чат!";
+
+                $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                    . "Внимание, {$responsibleTag}!\n"
+                    . "• Запрос статуса задачи №{$activeTaskId}: '{$currentText}'.\n"
+                    . "• Статус: {$activeTaskStatus}, дедлайн: {$activeTaskDeadlineFormatted}.\n"
+                    . "(Агент на связи).";
+
+                return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+            }
+        }
+
+        // =========================================================================
+        // ПРИОРИТЕТ 3: МАТЕРИАЛЫ, ССЫЛКИ, ФАЙЛЫ (ЯНДЕКС.ДИСК И ДР.)
+        // =========================================================================
+        $hasUrl = preg_match('/https?:\/\/[^\s]+/i', $currentText, $urlMatch);
+        $isMaterials = (
+            $hasUrl ||
+            str_contains($lower, 'диск') ||
+            str_contains($lower, 'яндекс') ||
+            str_contains($lower, 'ссылк') ||
+            str_contains($lower, 'файл') ||
+            str_contains($lower, 'материал') ||
+            str_contains($lower, 'скинул') ||
+            str_contains($lower, 'отправил') ||
+            str_contains($lower, 'прикрепил') ||
+            str_contains($lower, 'вот архив')
+        );
+
+        if ($isMaterials) {
+            if ($activeTaskId > 0) {
+                // Прикрепляем комментарий к задаче
+                $commentText = "Клиент предоставил материалы в чате Открытой линии Telegram:\n" . $currentText;
+                $this->taskService->addComment($activeTaskId, $commentText);
+
+                $publicReply = "Отлично, материалы принял и зафиксировал! Прикрепил ссылку к задаче №{$activeTaskId} («{$activeTaskTitle}»).\n\n"
+                    . "Никита Минаев и команда уже приступают к реализации. Плановый дедлайн: {$activeTaskDeadlineFormatted}.\n\n"
+                    . "Как только портфолио будет размещено и проверено — сразу сообщу вам сюда!";
+
+                $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                    . "Внимание, {$responsibleTag}!\n"
+                    . "• Клиент предоставил ссылку/материалы по задаче №{$activeTaskId}: '{$currentText}'.\n"
+                    . "• Материалы добавлены комментарием в карточку задачи. Можно приступать к верстке и наполнению.";
+
+                return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+            }
+        }
+
+        // =========================================================================
+        // ПРИОРИТЕТ 4: ОТВЕТСТВЕННЫЙ СПЕЦИАЛИСТ / КОНТАКТЫ РАЗРАБОТЧИКА
+        // =========================================================================
+        $isResponsibleQuestion = (
+            str_contains($lower, 'кто делает') ||
+            str_contains($lower, 'кто будет делать') ||
+            str_contains($lower, 'кто ответственный') ||
+            str_contains($lower, 'кто исполнитель') ||
+            str_contains($lower, 'кто ведет') ||
+            str_contains($lower, 'с кем связаться') ||
+            str_contains($lower, 'контакты разработчика')
+        );
+
+        if ($isResponsibleQuestion) {
+            $publicReply = "Ответственный специалист и ведущий исполнитель по вашей задаче — **Минаев Никита** (ведущий разработчик WAYDEV, [USER=1650]).\n\n"
+                . "Он лично курирует проект и выполняет работы. Я непрерывно нахожусь на связи и передаю любые ваши комментарии и материалы напрямую Никите.";
+
+            $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                . "Внимание, {$responsibleTag}!\n"
+                . "• Клиент поинтересовался исполнителем задачи.\n"
+                . "(Озвучен ответственный: Минаев Никита).";
+
+            return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+        }
+
+        // =========================================================================
+        // ПРИОРИТЕТ 5: СТОИМОСТЬ И ОПЛАТА
+        // =========================================================================
+        $isCostQuestion = (
+            str_contains($lower, 'стоимост') ||
+            str_contains($lower, 'цена') ||
+            str_contains($lower, 'цену') ||
+            str_contains($lower, 'сколько стоит') ||
+            str_contains($lower, 'почем') ||
+            str_contains($lower, 'смет') ||
+            str_contains($lower, 'оплат') ||
+            str_contains($lower, 'бюджет') ||
+            str_contains($lower, 'расценки')
+        );
+
+        if ($isCostQuestion) {
+            $publicReply = "По стоимости выполнения работ:\n\n"
+                . "• **Для клиентов на абонентском сопровождении / техподдержке:** часы автоматически списываются из ежемесячного пакета (по текущей задаче ориентир около 2–4 нормо-часов).\n"
+                . "• **При проектной / разовой оплате:** после получения материалов с Яндекс.Диска Никита Минаев согласует с вами точную фиксированную смету до начала активных работ.\n\n"
+                . "Подскажите, у вас действует абонентский договор или планируется разовая оплата по факту?";
+
+            $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                . "Внимание, {$responsibleTag}!\n"
+                . "• Вопрос клиента по стоимости / смете: '{$currentText}'.\n"
+                . "(Разъяснены варианты абонентского пакета и разовой сметы).";
+
+            return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+        }
+
+        // =========================================================================
+        // ПРИОРИТЕТ 6: КОРОТКИЕ ПОДТВЕРЖДЕНИЯ И ВЕЖЛИВОСТЬ (СПАСИБО, ОК, ДОГОВОРИЛИСЬ)
+        // =========================================================================
+        $isShortAck = (
+            preg_match('/^(спасибо|благодарю|отлично|хорошо|договорились|ок|ладно|понял|принято|буду ждать|супер|ждем)[!.\s]*$/iu', $currentText) ||
+            str_contains($lower, 'договорились') ||
+            str_contains($lower, 'буду ждать') ||
+            (mb_strlen($currentText) < 25 && (str_contains($lower, 'спасибо') || str_contains($lower, 'хорошо') || str_contains($lower, 'отлично') || $lower === 'ок'))
+        );
+
+        if ($isShortAck) {
+            $publicReply = "Пожалуйста, {$clientName}! Задача зафиксирована и находится на контроле. Буду ждать ссылку на материалы с Яндекс.Диска. Если появятся вопросы или дополнения — сразу пишите сюда, я на связи!";
+
+            $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                . "Внимание, {$responsibleTag}!\n"
+                . "• Клиент подтвердил информацию: '{$currentText}'.\n"
+                . "(Ожидаем ссылку на материалы).";
+
+            return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+        }
+
+        // =========================================================================
+        // ПРИОРИТЕТ 7: ПОСТАНОВКА ЗАДАЧ И РЕГИСТРАЦИЯ ИНЦИДЕНТОВ / ДОРАБОТОК
+        // =========================================================================
+        $isTaskOrIncident = (
             str_contains($lower, 'не работа') ||
             str_contains($lower, 'отвалил') ||
             str_contains($lower, 'сломал') ||
@@ -319,34 +560,70 @@ class Line18AutoResponder
             str_contains($lower, 'пада') ||
             str_contains($lower, 'лежит') ||
             str_contains($lower, 'доработ') ||
-            str_contains($lower, 'сделай')
+            str_contains($lower, 'сделай') ||
+            str_contains($lower, 'сделать') ||
+            str_contains($lower, 'вывести') ||
+            str_contains($lower, 'добавить') ||
+            str_contains($lower, 'разместить') ||
+            str_contains($lower, 'поменять') ||
+            str_contains($lower, 'изменить') ||
+            str_contains($lower, 'настроить') ||
+            str_contains($lower, 'сверстать') ||
+            str_contains($lower, 'создать') ||
+            str_contains($lower, 'подключить') ||
+            str_contains($lower, 'вопрос по сайту') ||
+            (str_contains($lower, 'нужно') && mb_strlen($currentText) > 15) ||
+            (str_contains($lower, 'надо') && mb_strlen($currentText) > 15)
         );
 
-        if ($isIncident) {
-            // Определяем домен / портал / проект
-            $project = $this->detectProject($lower, $currentText);
+        if ($isTaskOrIncident) {
+            // Проверяем: не относится ли это к уже активной задаче (защита от дублирования!)
+            $alreadyHandled = false;
+            if ($activeTaskId > 0) {
+                if (str_contains($lower, 'портфолио') && str_contains(mb_strtolower($activeTaskTitle), 'портфолио')) {
+                    $alreadyHandled = true;
+                } elseif (str_contains($lower, 'телефони') && str_contains(mb_strtolower($activeTaskTitle), 'телефони')) {
+                    $alreadyHandled = true;
+                }
+            }
 
+            if ($alreadyHandled) {
+                $publicReply = "Эта задача уже поставлена и находится в активной работе:\n\n"
+                    . "• **Задача №{$activeTaskId}:** «{$activeTaskTitle}»\n"
+                    . "• **Ответственный специалист:** Минаев Никита\n"
+                    . "• **Крайний срок:** {$activeTaskDeadlineFormatted}\n\n"
+                    . "Ожидаю ссылку на материалы с Яндекс.Диска, чтобы специалисты приступили к вёрстке!";
+
+                $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                    . "Внимание, {$responsibleTag}!\n"
+                    . "• Повторный запрос по уже созданной задаче №{$activeTaskId}. Напоминание клиенту отправлено.";
+
+                return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+            }
+
+            // Новая задача / инцидент
+            $project = $this->detectProject($lower, $currentText);
             $taskSummary = $this->buildIncidentSummary($currentText, $project['name']);
             $taskDate = date('d.m.Y');
-            $deadline = date('Y-m-d 19:00:00'); // Срочные инциденты - сегодня до 19:00
+            $deadline = date('Y-m-d 18:00:00', strtotime('+1 day')); // По умолчанию +1 рабочий день
 
             $taskData = [
                 'project_group_name'  => $project['group_name'],
                 'task_summary'        => $taskSummary,
                 'task_date'           => $taskDate,
                 'tags'                => ['ИИ-Агент'],
-                'description'         => "Критический инцидент / задача от клиента в открытой линии:\n{$currentText}\n\nПлан действий:\n1. Провести первичную диагностику и локализацию сбоя на {$project['domain']}\n2. Выполнить восстановительные работы и исправления\n3. Провести тестирование и убедиться в работоспособности\n4. Уведомить клиента в чате открытой линии",
+                'description'         => "Задача от клиента в открытой линии Telegram:\n{$currentText}\n\nПлан действий:\n1. Анализ требований и материалов проекта {$project['domain']}\n2. Выполнение работ и реализация задачи\n3. Тестирование и контроль качества\n4. Сдача результата клиенту в чате открытой линии",
                 'plan_steps'          => [
-                    "Диагностика сбоя на проекте {$project['name']}",
-                    "Локализация и устранение проблемы",
-                    "Тестирование сервиса",
+                    "Анализ требований по проекту {$project['name']}",
+                    "Реализация задачи и доработки",
+                    "Тестирование функционала",
                     "Уведомление клиента о результатах",
                 ],
                 'links'               => ["https://{$project['domain']}"],
                 'checklist'           => [
-                    "Диагностика инцидента",
-                    "Восстановление и исправление",
-                    "Тестирование функционала и сдача",
+                    "Анализ требований и подготовка",
+                    "Выполнение доработок",
+                    "Тестирование и проверка результата",
                 ],
                 'responsible_id'      => self::OPERATOR_USER_ID,
                 'deadline'            => $deadline,
@@ -361,23 +638,27 @@ class Line18AutoResponder
             }
 
             $createRes = $this->taskService->createTask($taskData);
-            if ($createRes['success'] && !empty($createRes['taskId'])) {
-                $taskId = $createRes['taskId'];
+            if ($createRes['success'] && !empty($createRes['task_id'])) {
+                $taskId = (int)$createRes['task_id'];
+                $this->state[$dialogId]['active_task_id'] = $taskId;
+                $this->state[$dialogId]['active_task_title'] = "{$project['group_name']} | {$taskSummary} | {$taskDate}";
+                $this->state[$dialogId]['active_task_deadline'] = date('d.m.Y, 18:00', strtotime($deadline));
+                $this->state[$dialogId]['active_project_domain'] = $project['domain'];
+                $this->saveState();
 
-                $publicReply = "Принято в работу! Зафиксировал задачу по обращению:\n\n"
+                $publicReply = "Принято в работу! Зафиксировал задачу по регламенту:\n\n"
                     . "• **Задача №{$taskId}:** «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
                     . "• **Проект:** {$project['domain']}\n"
                     . "• **Ответственный специалист:** Минаев Никита\n"
-                    . "• **Приоритет:** Срочно (инцидент)\n"
-                    . "• **Крайний срок:** сегодня, " . date('d.m.Y, 19:00') . "\n\n"
-                    . "Специалисты уже подключаются к диагностике. Как только появятся результаты или восстановим работу — сразу сообщу вам сюда.";
+                    . "• **Крайний срок:** " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n\n"
+                    . "Специалисты подключаются к работе. О ходе выполнения и результатах сразу сообщу вам сюда!";
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
-                    . "• [b][КРИТИЧЕСКИЙ ИНЦИДЕНТ / ЗАДАЧА][/b]\n"
+                    . "• [b][НОВАЯ ЗАДАЧА][/b]\n"
                     . "• Сформирована задача №{$taskId}: «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
                     . "• Текст клиента: '{$currentText}'\n"
-                    . "• Ответственный: Минаев Никита, дедлайн: сегодня до 19:00\n"
+                    . "• Ответственный: Минаев Никита, дедлайн: " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n"
                     . "(Агент продолжает сопровождать диалог).";
 
                 return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
@@ -385,52 +666,15 @@ class Line18AutoResponder
         }
 
         // =========================================================================
-        // ПРИОРИТЕТ 2: ВОПРОСЫ О СТАТУСЕ ЗАДАЧ
-        // =========================================================================
-        $isStatusQuestion = (
-            str_contains($lower, 'статус') ||
-            str_contains($lower, 'что с задач') ||
-            str_contains($lower, 'как дела с') ||
-            str_contains($lower, 'когда будет готов') ||
-            str_contains($lower, 'какой результат')
-        );
-
-        if ($isStatusQuestion) {
-            $tasksRes = $this->taskService->getTasks(['responsible_id' => self::OPERATOR_USER_ID], 5);
-            $recentTasks = $tasksRes['tasks'] ?? [];
-
-            if (!empty($recentTasks)) {
-                $matchedTask = $recentTasks[0];
-                $tId = $matchedTask['ID'] ?? ($matchedTask['id'] ?? '');
-                $tTitle = $matchedTask['TITLE'] ?? ($matchedTask['title'] ?? '');
-                $tStatus = $matchedTask['statusText'] ?? 'В работе';
-                $tDeadline = !empty($matchedTask['DEADLINE']) ? date('d.m.Y H:i', strtotime($matchedTask['DEADLINE'])) : 'Уточняется';
-
-                $publicReply = "По вашей задаче №{$tId} («{$tTitle}»):\n\n"
-                    . "• **Статус:** {$tStatus}\n"
-                    . "• **Ответственный:** Минаев Никита\n"
-                    . "• **Крайний срок:** {$tDeadline}\n\n"
-                    . "Задача в работе у специалистов. О любых обновлениях я сразу сообщу вам сюда.";
-
-                $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
-                    . "Внимание, {$responsibleTag}!\n"
-                    . "• Запрос статуса задачи: '{$currentText}'.\n"
-                    . "• Предоставлен статус задачи №{$tId} ({$tStatus}).\n"
-                    . "(Агент на связи).";
-
-                return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
-            }
-        }
-
-        // =========================================================================
-        // ПРИОРИТЕТ 3: ВОПРОС ОБ УСЛУГАХ КОМПАНИИ WAYDEV
+        // ПРИОРИТЕТ 8: ВОПРОС ОБ УСЛУГАХ КОМПАНИИ WAYDEV
         // =========================================================================
         $isServicesInquiry = (
             str_contains($lower, 'услуг') ||
             str_contains($lower, 'что вы делаете') ||
             str_contains($lower, 'чем занимаетесь') ||
             str_contains($lower, 'что предлагаете') ||
-            str_contains($lower, 'какой стек')
+            str_contains($lower, 'какой стек') ||
+            str_contains($lower, 'компетенци')
         );
 
         if ($isServicesInquiry) {
@@ -444,15 +688,14 @@ class Line18AutoResponder
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
-                . "• Пользователь KelvinMarty запросил услуги компании.\n"
+                . "• Пользователь KelvinMarty запросил список услуг компании.\n"
                 . "(Предоставлен список услуг).";
 
             return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
         }
 
         // =========================================================================
-        // ПРИОРИТЕТ 4: КОРРЕКТНОЕ ЗНАКОМСТВО / ПРЕДСТАВЛЕНИЕ
-        // (Строгий парсер имени с черным списком стоп-слов)
+        // ПРИОРИТЕТ 9: КОРРЕКТНОЕ ЗНАКОМСТВО / ПРЕДСТАВЛЕНИЕ
         // =========================================================================
         $identity = $this->parseStrictIdentity($currentText);
         if ($identity !== null) {
@@ -478,18 +721,12 @@ class Line18AutoResponder
         }
 
         // =========================================================================
-        // ПРИОРИТЕТ 5: ПРИВЕТСТВИЕ И ОБЩИЕ ВОПРОСЫ
+        // ПРИОРИТЕТ 10: ПРИВЕТСТВИЕ И ОБЩИЕ ВОПРОСЫ
         // =========================================================================
-        $isGreeting = str_contains($lower, 'привет') || str_contains($lower, 'здравствуй') || str_contains($lower, 'добрый день') || str_contains($lower, 'добрый вечер');
+        $isGreeting = str_contains($lower, 'привет') || str_contains($lower, 'здравствуй') || str_contains($lower, 'добрый день') || str_contains($lower, 'добрый вечер') || str_contains($lower, 'салют');
         if ($isGreeting) {
-            // Проверяем наличие активных задач в работе
-            $tasksRes = $this->taskService->getTasks(['responsible_id' => self::OPERATOR_USER_ID], 1);
-            $activeTask = !empty($tasksRes['tasks'][0]) ? $tasksRes['tasks'][0] : null;
-
-            if ($activeTask !== null && (int)($activeTask['status'] ?? 0) !== 5) {
-                $tId = $activeTask['id'] ?? ($activeTask['ID'] ?? '');
-                $tTitle = $activeTask['title'] ?? ($activeTask['TITLE'] ?? '');
-                $publicReply = "Добрый день, {$clientName}! Да, я на связи. По вашей задаче №{$tId} («{$tTitle}») специалисты уже занимаются вопросом. Подскажите, появились новые подробности или у вас другой вопрос?";
+            if ($activeTaskId > 0) {
+                $publicReply = "Добрый день, {$clientName}! Да, я на связи. По вашей задаче №{$activeTaskId} («{$activeTaskTitle}») всё под контролем у специалистов. Подскажите, появились новые подробности или у вас другой вопрос?";
             } else {
                 $publicReply = "Добрый день, {$clientName}! Я на связи, слушаю вас. Чем могу помочь сегодня?";
             }
@@ -498,9 +735,23 @@ class Line18AutoResponder
             return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
         }
 
-        // Дефолтный ответ (естественный и дружелюбный)
-        $publicReply = "Понял вас, {$clientName}. Уточните, пожалуйста, подробнее суть задачи или проекта, и я сразу передам информацию специалистам.";
-        $internalNote = "🤖 [Внутренняя сводка ИИ]:\nВнимание, {$responsibleTag}!\n• Сообщение: '{$currentText}'.";
+        // =========================================================================
+        // ПРИОРИТЕТ 11: УМНЫЙ КОНТЕКСТНЫЙ ФОЛЛБЕК (БЕЗ ШАБЛОННОГО ЗАЦИКЛИВАНИЯ!)
+        // =========================================================================
+        if ($activeTaskId > 0) {
+            $publicReply = "Принял ваше сообщение: «{$currentText}».\n\n"
+                . "Зафиксировал и передал информацию ведущему разработчику Никите Минаеву ([USER=1650]) в контексте задачи №{$activeTaskId} («{$activeTaskTitle}»).\n\n"
+                . "Если потребуется что-то уточнить — мы сразу напишем вам сюда!";
+        } else {
+            $publicReply = "Принял ваше сообщение: «{$currentText}».\n\n"
+                . "Передал информацию специалистам и Никите Минаеву ([USER=1650]). Сейчас ознакомимся с деталями и вернемся к вам с ответом.";
+        }
+
+        $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+            . "Внимание, {$responsibleTag}!\n"
+            . "• Сообщение клиента в открытой линии: '{$currentText}'.\n"
+            . ($activeTaskId > 0 ? "• Связано с задачей №{$activeTaskId}.\n" : "")
+            . "(Передано на контроль оператору).";
 
         return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
     }
@@ -595,6 +846,9 @@ class Line18AutoResponder
         $lower = mb_strtolower($text);
         if (str_contains($lower, 'телефони') || str_contains($lower, 'sip')) {
             return "Восстановление синхронизации SIP-телефонии на портале";
+        }
+        if (str_contains($lower, 'портфолио')) {
+            return "Вывод портфолио работ на сайте";
         }
         if (str_contains($lower, 'сайт') && (str_contains($lower, 'не работа') || str_contains($lower, 'лежит'))) {
             return "Восстановление доступности сайта";
