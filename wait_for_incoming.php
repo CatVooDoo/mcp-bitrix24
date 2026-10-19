@@ -28,7 +28,7 @@ $chatService = new ChatService();
 
 echo "[" . date('Y-m-d H:i:s') . "] Слушатель запущен: мониторинг сообщений KelvinMarty в {$dialogId} (после ID {$lastRepliedMsgId})...\n";
 
-$maxSeconds = 600; // Максимум 10 минут на сессию
+$maxSeconds = 3600; // До 1 часа на сессию ожидания
 $startTime = time();
 
 while (time() - $startTime < $maxSeconds) {
