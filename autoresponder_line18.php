@@ -3,16 +3,15 @@
 declare(strict_types=1);
 
 /**
- * Фоновый автоответчик для Открытой линии 18 ("Открытая Линия Telegram (Wazzup)").
+ * Контекстно-зависимый фоновый автоответчик для Открытой линии 18 ("Открытая Линия Telegram (Wazzup)").
  *
- * Регламент и правила:
- * 1. Опрос каждые 30 секунд.
- * 2. Ответ ТОЛЬКО пользователю KelvinMarty (автор 1712 или ник KelvinMarty).
- * 3. Перед ответом ОБЯЗАТЕЛЬНО проверяет: клиент это или нет (CRM Contact / Company / Lead).
- * 4. Если НЕ клиент (не привязан к CRM): вежливо уточняет у него компанию, проект, имя и суть задачи.
- * 5. В скрытом чате (SYSTEM => 'Y') отправляет сводку с обязательным тегом:
- *    [USER=1650]Минаев Никита[/USER] (для колокольчика/пуша).
- * 6. Автономная поддержка: удерживает диалог, при запросе задачи проверяет существующие или ставит новую по регламенту из 6 пунктов.
+ * Ключевые возможности:
+ * 1. Анализирует ВСЮ историю диалога (что говорил клиент, что уже отвечал бот).
+ * 2. Не повторяет шаблонные вопросы и приветствия, если они уже были заданы в диалоге.
+ * 3. Отвечает строго по существу вопроса (услуги компании, цены, сроки, статус задач, баги).
+ * 4. Проверяет привязку к CRM (Контакт, Компания, Лид, Сделки, Задачи).
+ * 5. В скрытом чате (SYSTEM => 'Y') отправляет сводку с обязательным тегом [USER=1650]Минаев Никита[/USER].
+ * 6. Фильтр: диалог ТОЛЬКО с пользователем KelvinMarty.
  */
 
 require_once __DIR__ . '/src/Core/Bootstrap.php';
@@ -55,15 +54,6 @@ class Line18AutoResponder
                 $this->state = $decoded;
             }
         }
-
-        // Если для chat17478 еще нет записи, инициализируем последним старым сообщением (2194442), чтобы не спамить в историю
-        if (!isset($this->state['chat17478'])) {
-            $this->state['chat17478'] = [
-                'last_replied_msg_id' => 2194442,
-                'last_seen_at'        => date('c'),
-            ];
-            $this->saveState();
-        }
     }
 
     private function saveState(): void
@@ -97,7 +87,7 @@ class Line18AutoResponder
             $chatId = (int)($item['chat_id'] ?? 0);
             $effectiveDialogId = $dialogId !== '' ? $dialogId : ('chat' . $chatId);
 
-            // 1. Проверяем, относится ли диалог к Линии 18
+            // 1. Проверяем, Линия 18 ли это
             $isLine18 = false;
             if ($entityId !== '') {
                 $parts = explode('|', $entityId);
@@ -113,7 +103,7 @@ class Line18AutoResponder
                 continue;
             }
 
-            // 2. Фильтр: диалог ТОЛЬКО с пользователем KelvinMarty
+            // 2. Фильтр: ТОЛЬКО пользователь KelvinMarty
             $isTargetUser = false;
             if (stripos($title, self::TARGET_USER_SUBSTRING) !== false) {
                 $isTargetUser = true;
@@ -131,7 +121,6 @@ class Line18AutoResponder
                 continue;
             }
 
-            // Обрабатываем диалог
             if ($this->processDialog($effectiveDialogId, $chatId, $title, $item)) {
                 $processedCount++;
             }
@@ -141,15 +130,15 @@ class Line18AutoResponder
     }
 
     /**
-     * Обработка диалога пользователя KelvinMarty.
+     * Обработка диалога пользователя KelvinMarty с полным учетом истории.
      */
-    private function processDialog(string $dialogId, int $chatId, string $title, array $dialogMeta): bool
+    public function processDialog(string $dialogId, int $chatId, string $title, array $dialogMeta): bool
     {
         if ($chatId <= 0 && str_starts_with($dialogId, 'chat')) {
             $chatId = (int)substr($dialogId, 4);
         }
 
-        // Подключаем оператора к чату при необходимости
+        // Подключаем оператора при необходимости
         if ($chatId > 0) {
             $usersRes = \CRest::call('im.chat.user.list', ['CHAT_ID' => $chatId]);
             $usersList = is_array($usersRes['result'] ?? null) ? $usersRes['result'] : [];
@@ -158,8 +147,8 @@ class Line18AutoResponder
             }
         }
 
-        // Получаем историю сообщений
-        $historyRes = $this->chatService->getHistory($dialogId, 20);
+        // Загружаем историю последних сообщений (до 30 сообщений для полного контекста)
+        $historyRes = $this->chatService->getHistory($dialogId, 30);
         if (!$historyRes['success'] || empty($historyRes['messages'])) {
             return false;
         }
@@ -167,7 +156,9 @@ class Line18AutoResponder
         $messages = $historyRes['messages'];
         usort($messages, fn($a, $b) => (int)($a['id'] ?? 0) <=> (int)($b['id'] ?? 0));
 
-        // Ищем последнее входящее сообщение от клиента (KelvinMarty)
+        // Выделяем историю диалога: сообщения клиента и ответы нашего бота
+        $clientMessages = [];
+        $ourReplies = [];
         $lastClientMessage = null;
         $ourLastReplyTime = 0;
         $ourLastReplyId = 0;
@@ -175,14 +166,19 @@ class Line18AutoResponder
         foreach ($messages as $msg) {
             $authorId = (int)($msg['author_id'] ?? 0);
             $msgText = trim((string)($msg['text'] ?? ''));
+            if ($msgText === '') {
+                continue;
+            }
 
             if ($authorId === self::OPERATOR_USER_ID) {
+                // Если это системная внутренняя сводка, игнорируем как публичный ответ
                 if (!str_starts_with($msgText, '🤖 [Внутренняя')) {
+                    $ourReplies[] = $msg;
                     $ourLastReplyTime = strtotime((string)($msg['date'] ?? ''));
                     $ourLastReplyId = (int)($msg['id'] ?? 0);
                 }
             } elseif ($authorId === self::TARGET_USER_ID || $authorId > 0) {
-                // Сообщение от клиента KelvinMarty
+                $clientMessages[] = $msg;
                 $lastClientMessage = $msg;
             }
         }
@@ -208,35 +204,35 @@ class Line18AutoResponder
             return false;
         }
 
-        if ($clientText === '') {
-            $this->state[$dialogId]['last_replied_msg_id'] = $clientMsgId;
-            $this->saveState();
-            return false;
-        }
+        echo "[" . date('Y-m-d H:i:s') . "] Новое сообщение от KelvinMarty в {$dialogId}: '{$clientText}'\n";
 
-        echo "[" . date('Y-m-d H:i:s') . "] Новое входящее от KelvinMarty в {$dialogId}: '{$clientText}'\n";
+        // Проверка в CRM
+        $crmContext = $this->checkClientInCrm($dialogId, $clientAuthorId, $clientMessages);
 
-        // 3. ПРОВЕРКА КЛИЕНТА В CRM ПЕРЕД ОТВЕТОМ (Правило пользователя)
-        $crmContext = $this->checkClientInCrm($dialogId, $clientAuthorId, $clientText);
-
-        // 4. Формируем публичный ответ и скрытую сводку оператору
-        $result = $this->generateResponse($dialogId, $clientText, $clientAuthorId, $crmContext);
+        // Анализ контекста диалога (истории) и генерация умного ответа
+        $result = $this->generateContextualResponse(
+            $dialogId,
+            $clientText,
+            $clientMessages,
+            $ourReplies,
+            $crmContext
+        );
 
         $publicReply = $result['public_reply'];
         $internalNote = $result['internal_note'];
 
-        // 5. Отправка скрытой заметки оператору с тегом [USER=1650]
+        // Отправка скрытой заметки в чат с тегом [USER=1650]
         $hiddenRes = $this->chatService->sendReply($dialogId, $internalNote, [
             'SYSTEM' => 'Y',
         ]);
         if ($hiddenRes['success']) {
-            echo "[" . date('Y-m-d H:i:s') . "] Отправлена скрытая сводка с тегом [USER=" . self::OPERATOR_USER_ID . "]\n";
+            echo "[" . date('Y-m-d H:i:s') . "] Отправлена скрытая сводка оператору с тегом [USER=" . self::OPERATOR_USER_ID . "]\n";
         }
 
-        // 6. Отправка публичного ответа KelvinMarty
+        // Отправка публичного ответа пользователю KelvinMarty
         $sendRes = $this->chatService->sendReply($dialogId, $publicReply);
         if ($sendRes['success']) {
-            echo "[" . date('Y-m-d H:i:s') . "] Успешно отправлен ответ KelvinMarty в {$dialogId}\n";
+            echo "[" . date('Y-m-d H:i:s') . "] Успешно отправлен контекстный ответ клиенту в {$dialogId}\n";
             $this->state[$dialogId]['last_replied_msg_id'] = $clientMsgId;
             $this->state[$dialogId]['last_reply_at'] = date('c');
             $this->saveState();
@@ -248,11 +244,10 @@ class Line18AutoResponder
     }
 
     /**
-     * Обязательная проверка: клиент это или нет в CRM.
+     * Проверка клиента в CRM с учетом истории сообщений.
      */
-    private function checkClientInCrm(string $dialogId, int $authorId, string $messageText): array
+    private function checkClientInCrm(string $dialogId, int $authorId, array $clientMessages): array
     {
-        // 1. Поиск через досье диалога (crm bindings)
         $dossierRes = $this->crmService->getClientDossier(['chat_id' => $dialogId]);
         $dossier = $dossierRes['dossier'] ?? [];
 
@@ -263,17 +258,13 @@ class Line18AutoResponder
         $deals = $dossier['deals'] ?? [];
         $contracts = $dossier['contracts'] ?? [];
 
-        // 2. Если по chat_id не привязан, пробуем найти по имени 'KelvinMarty'
-        if (empty($contact) && empty($company) && empty($lead)) {
-            $contactsRes = $this->crmService->getContacts(['search_query' => 'KelvinMarty'], 1);
-            if (!empty($contactsRes['contacts'][0])) {
-                $contact = $contactsRes['contacts'][0];
-            }
-        }
+        // Проверяем ранее сохраненные данные в состоянии диалога
+        $savedCompany = $this->state[$dialogId]['identified_company'] ?? null;
+        $savedName = $this->state[$dialogId]['identified_name'] ?? null;
 
-        $isClient = (!empty($contact) || !empty($company) || !empty($lead));
+        $isClient = (!empty($contact) || !empty($company) || !empty($lead) || !empty($savedCompany));
 
-        $clientName = 'KelvinMarty';
+        $clientName = $savedName ?: 'KelvinMarty';
         if (!empty($contact)) {
             $cName = trim(($contact['NAME'] ?? '') . ' ' . ($contact['LAST_NAME'] ?? ''));
             if ($cName !== '') {
@@ -281,7 +272,7 @@ class Line18AutoResponder
             }
         }
 
-        $companyTitle = !empty($company) ? ($company['TITLE'] ?? '') : '';
+        $companyTitle = !empty($company) ? ($company['TITLE'] ?? '') : ($savedCompany ?: '');
         $assignedById = (int)($contact['ASSIGNED_BY_ID'] ?? ($company['ASSIGNED_BY_ID'] ?? ($lead['ASSIGNED_BY_ID'] ?? self::OPERATOR_USER_ID)));
         if ($assignedById <= 0) {
             $assignedById = self::OPERATOR_USER_ID;
@@ -302,11 +293,16 @@ class Line18AutoResponder
     }
 
     /**
-     * Генерация ответа с учетом статуса клиента (Клиент / Не клиент).
+     * Контекстная генерация ответа на основе полной истории диалога.
      */
-    private function generateResponse(string $dialogId, string $text, int $authorId, array $crmContext): array
-    {
-        $lower = mb_strtolower($text);
+    private function generateContextualResponse(
+        string $dialogId,
+        string $currentText,
+        array $clientMessages,
+        array $ourReplies,
+        array $crmContext
+    ): array {
+        $lower = mb_strtolower($currentText);
         $isClient = $crmContext['is_client'];
         $clientName = $crmContext['client_name'];
         $companyTitle = $crmContext['company_title'];
@@ -317,59 +313,117 @@ class Line18AutoResponder
             $responsibleTag .= " и [USER={$assignedById}]Ответственный менеджер[/USER]";
         }
 
-        // ----------------------------------------------------
-        // СЦЕНАРИЙ 1: Пользователь НЕ ПРИВЯЗАН к CRM (не клиент)
-        // Регламент: вежливо уточняем компанию, проект, имя и детали
-        // ----------------------------------------------------
-        if (!$isClient) {
-            // Проверяем, упоминается ли известный проект в тексте
-            $project = $this->detectProject($lower, '');
+        // Анализ истории: что бот уже говорил ранее?
+        $alreadyIntroduced = false;
+        $alreadyAskedIdentity = !empty($this->state[$dialogId]['asked_identity']);
 
-            if ($project !== null && $project['name'] !== 'WAYDEV') {
-                // Проект назван в сообщении
-                $publicReply = "Здравствуйте, {$clientName}! Я ИИ-ассистент компании WAYDEV.\n\n"
-                    . "Вижу ваше обращение по проекту «{$project['name']}». При этом в нашей системе ваш профиль Telegram пока не привязан к карточке клиента.\n\n"
-                    . "Подскажите, пожалуйста:\n"
-                    . "1. Как ваши полные имя и фамилия (и должность)?\n"
-                    . "2. Какой конкретно вопрос или доработку требуется решить по проекту?\n\n"
-                    . "Я свяжу ваш контакт с карточкой проекта и сразу передам информацию ответственным специалистам.";
-
-                $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
-                    . "Внимание, {$responsibleTag}!\n"
-                    . "• Обращение от KelvinMarty (Telegram, Линия 18)\n"
-                    . "• Статус в CRM: [b][НЕ_КЛИЕНТ / НОВЫЙ_КОНТАКТ][/b]\n"
-                    . "• Упомянутый проект: {$project['name']} ({$project['domain']})\n"
-                    . "• Текст сообщения: '{$text}'\n"
-                    . "• Действие ИИ: запрос ФИО и должности для привязки контакта к проекту.\n"
-                    . "(Агент продолжает самостоятельно сопровождать диалог).";
-
-                return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+        foreach ($ourReplies as $prevReply) {
+            $prevText = (string)($prevReply['text'] ?? '');
+            if (str_contains($prevText, 'Я ИИ-ассистент службы технической поддержки') || str_contains($prevText, 'Какую компанию или проект вы представляете')) {
+                $alreadyIntroduced = true;
+                $alreadyAskedIdentity = true;
             }
+        }
 
-            // Общее сообщение / вопрос от неопознанного пользователя
-            $publicReply = "Здравствуйте, {$clientName}! Я ИИ-ассистент службы технической поддержки WAYDEV.\n\n"
-                . "В нашей CRM-системе ваш контакт в Telegram пока не привязан к действующему договору или карточке клиента. Чтобы мы могли оперативно помочь, уточните, пожалуйста:\n\n"
-                . "1. Какую компанию или проект вы представляете?\n"
-                . "2. Как к вам обращаться (ваше имя)?\n"
-                . "3. Опишите ваш вопрос или задачу (какой сайт/сервис, что требуется сделать).\n\n"
-                . "Я зафиксирую обращение и подключу проектную команду.";
+        // Обновляем флаг в состоянии
+        if ($alreadyAskedIdentity) {
+            $this->state[$dialogId]['asked_identity'] = true;
+        }
+
+        // =========================================================================
+        // ИНТЕНТ 1: ВОПРОС ОБ УСЛУГАХ КОМПАНИИ WAYDEV
+        // =========================================================================
+        $isServicesInquiry = (
+            str_contains($lower, 'услуг') ||
+            str_contains($lower, 'что вы делаете') ||
+            str_contains($lower, 'что делаете') ||
+            str_contains($lower, 'чем занимаетесь') ||
+            str_contains($lower, 'чем вы занимаетесь') ||
+            str_contains($lower, 'что предлагаете') ||
+            str_contains($lower, 'чем можете помочь') ||
+            str_contains($lower, 'какой стек') ||
+            str_contains($lower, 'направления')
+        );
+
+        if ($isServicesInquiry) {
+            $publicReply = "Компания WAYDEV специализируется на веб-разработке, внедрении цифровых решений и технической поддержке бизнеса.\n\n"
+                . "Наши ключевые направления услуг:\n"
+                . "1. **Битрикс24:** внедрение CRM, настройка бизнес-процессов и смарт-процессов, интеграция с 1С, телефонией, сайтами и мессенджерами (Telegram, WhatsApp).\n"
+                . "2. **Веб-разработка:** создание сайтов, интернет-магазинов, личных кабинетов и B2B-порталов на 1С-Битрикс, Laravel, React/Vue.\n"
+                . "3. **Техническая поддержка и SLA:** круглосуточный мониторинг, L1/L2 поддержка, доработки по ТЗ, оптимизация скорости и устранение сбоев.\n"
+                . "4. **Мобильная разработка:** приложения для iOS и Android.\n"
+                . "5. **ИИ-интеграции и автоматизация:** разработка умных AI-ассистентов, ботов техподдержки и интеграция нейросетей в бизнес-процессы.\n\n"
+                . "Подскажите, какая задача или проект актуальны для вас сейчас? Я с радостью сориентирую подробнее!";
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
-                . "• Обращение от KelvinMarty (Telegram, Линия 18)\n"
-                . "• Статус в CRM: [b][НЕ_КЛИЕНТ / НОВЫЙ_КОНТАКТ][/b]\n"
-                . "• Текст сообщения: '{$text}'\n"
-                . "• Действие ИИ: вежливый опрос пользователя для идентификации клиента (компания, проект, имя, суть задачи).\n"
-                . "(Агент ведет диалог в открытой линии).";
+                . "• Пользователь KelvinMarty интересуется услугами компании.\n"
+                . "• Текст вопроса: '{$currentText}'\n"
+                . "• Действие ИИ: предоставлен структурированный список направлений услуг WAYDEV.\n"
+                . "(Агент продолжает сопровождать диалог).";
 
             return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
         }
 
-        // ----------------------------------------------------
-        // СЦЕНАРИЙ 2: Пользователь НАЙДЕН в CRM (действующий клиент)
-        // ----------------------------------------------------
+        // =========================================================================
+        // ИНТЕНТ 2: ВОПРОС О СТОИМОСТИ / ТАРИФАХ
+        // =========================================================================
+        $isPricingInquiry = (
+            str_contains($lower, 'стоимост') ||
+            str_contains($lower, 'сколько стоит') ||
+            str_contains($lower, 'цена') ||
+            str_contains($lower, 'цены') ||
+            str_contains($lower, 'тариф') ||
+            str_contains($lower, 'прайс') ||
+            str_contains($lower, 'расценк')
+        );
 
-        // 2.1 Вопрос о статусе задачи
+        if ($isPricingInquiry) {
+            $publicReply = "Стоимость услуг зависит от формата и объема работ:\n\n"
+                . "• **Техническая поддержка:** работаем по абонентским пакетам часов (с SLA и гарантированным временем реакции) либо по фактическим трудозатратам (Time & Material).\n"
+                . "• **Проектная разработка и доработки:** оцениваем задачу в часах по техническому заданию с фиксированной стоимостью этапов.\n\n"
+                . "Если у вас есть конкретная задача, ТЗ или описание доработки — пришлите сюда, и мы подготовим предварительную оценку по срокам и бюджету.";
+
+            $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                . "Внимание, {$responsibleTag}!\n"
+                . "• Пользователь KelvinMarty запросил информацию о стоимости/тарифах: '{$currentText}'.\n"
+                . "• Действие ИИ: предоставлена информация по моделям ценообразования, запрошено ТЗ для оценки.\n"
+                . "(Агент на связи).";
+
+            return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+        }
+
+        // =========================================================================
+        // ИНТЕНТ 3: ПОЛЬЗОВАТЕЛЬ ПРЕДСТАВЛЯЕТСЯ / НАЗЫВАЕТ КОМПАНИЮ ИЛИ ПРОЕКТ
+        // =========================================================================
+        $introMatch = $this->extractIdentityInfo($currentText);
+        if ($introMatch !== null) {
+            if (!empty($introMatch['company'])) {
+                $this->state[$dialogId]['identified_company'] = $introMatch['company'];
+                $companyTitle = $introMatch['company'];
+            }
+            if (!empty($introMatch['name'])) {
+                $this->state[$dialogId]['identified_name'] = $introMatch['name'];
+                $clientName = $introMatch['name'];
+            }
+            $this->saveState();
+
+            $publicReply = "Очень приятно познакомиться, {$clientName}!" . ($companyTitle ? " (компания {$companyTitle})" : "") . "\n\n"
+                . "Я зафиксировал ваши данные в системе. Подскажите, какой вопрос или задачу требуется решить?";
+
+            $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                . "Внимание, {$responsibleTag}!\n"
+                . "• Пользователь идентифицирован в диалоге: {$clientName}" . ($companyTitle ? ", Компания: {$companyTitle}" : "") . ".\n"
+                . "• Текст: '{$currentText}'\n"
+                . "• Данные сохранены в профиле сессии.\n"
+                . "(Агент продолжает ведение диалога).";
+
+            return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+        }
+
+        // =========================================================================
+        // ИНТЕНТ 4: ВОПРОСЫ О СТАТУСЕ ЗАДАЧИ
+        // =========================================================================
         $isStatusQuestion = (
             str_contains($lower, 'статус') ||
             str_contains($lower, 'что с задач') ||
@@ -383,7 +437,7 @@ class Line18AutoResponder
         if ($isStatusQuestion) {
             $recentTasks = $crmContext['tasks'];
             if (empty($recentTasks)) {
-                $tasksRes = $this->taskService->getTasks(['responsible_id' => self::OPERATOR_USER_ID], 10);
+                $tasksRes = $this->taskService->getTasks(['responsible_id' => self::OPERATOR_USER_ID], 5);
                 $recentTasks = $tasksRes['tasks'] ?? [];
             }
 
@@ -394,25 +448,32 @@ class Line18AutoResponder
                 $tStatus = $matchedTask['statusText'] ?? 'В работе';
                 $tDeadline = !empty($matchedTask['DEADLINE']) ? date('d.m.Y H:i', strtotime($matchedTask['DEADLINE'])) : 'Уточняется';
 
-                $publicReply = "Здравствуйте, {$clientName}!\n\n"
-                    . "По вашей задаче №{$tId} («{$tTitle}»):\n"
+                $publicReply = "По вашей задаче №{$tId} («{$tTitle}»):\n\n"
                     . "• Текущий статус: {$tStatus}\n"
-                    . "• Ответственный: Минаев Никита\n"
+                    . "• Ответственный специалист: Минаев Никита\n"
                     . "• Крайний срок: {$tDeadline}\n\n"
-                    . "Задача в работе у специалистов. Как только будут новости или релиз, я сразу напишу вам сюда.";
+                    . "Задача находится на контроле. Как только появятся обновления, я сразу напишу сюда.";
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
-                    . "• Клиент {$clientName} ({$companyTitle}) запросил статус задачи.\n"
-                    . "• Вопрос: '{$text}'\n"
-                    . "• Ответ ИИ: предоставлен статус задачи №{$tId} ({$tStatus}).\n"
+                    . "• Запрос статуса задачи от KelvinMarty: '{$currentText}'.\n"
+                    . "• Предоставлен статус задачи №{$tId} ({$tStatus}).\n"
                     . "(Агент сопровождает диалог).";
 
+                return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+            } else {
+                $publicReply = "На текущий момент по вашему обращению нет открытых задач в системе. Если у вас возникла техническая сложность или требуется доработка — опишите детали, и я поставлю задачу специалистам.";
+                $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                    . "Внимание, {$responsibleTag}!\n"
+                    . "• Запрос статуса от KelvinMarty, активных задач не найдено.\n"
+                    . "(Агент на связи).";
                 return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
             }
         }
 
-        // 2.2 Запрос на задачу / исправление бага
+        // =========================================================================
+        // ИНТЕНТ 5: ТЕХНИЧЕСКИЙ СБОЙ / БАГ / ЗАПРОС НА ДОРАБОТКУ
+        // =========================================================================
         $isTaskRequest = (
             str_contains($lower, 'исправ') ||
             str_contains($lower, 'не работа') ||
@@ -423,54 +484,48 @@ class Line18AutoResponder
             str_contains($lower, 'ошибк') ||
             str_contains($lower, 'слайдер') ||
             str_contains($lower, 'телефон') ||
+            str_contains($lower, 'проблем') ||
             str_contains($lower, 'добав') ||
             str_contains($lower, 'нужно') ||
             str_contains($lower, 'просьба')
         );
 
-        $project = $this->detectProject($lower, $companyTitle);
-
         if ($isTaskRequest) {
-            $hasEnoughDetails = mb_strlen($text) > 30;
+            $hasEnoughDetails = mb_strlen($currentText) > 30;
             if (!$hasEnoughDetails) {
-                $publicReply = "Здравствуйте, {$clientName}! Подскажите подробнее для постановки задачи специалистам:\n"
-                    . "1. На какой странице/сайте возникла проблема?\n"
+                $publicReply = "Подскажите, пожалуйста, подробнее:\n"
+                    . "1. На каком сайте или странице возникла сложность?\n"
                     . "2. Что именно работает некорректно и какой результат ожидается?\n"
-                    . "3. Пришлите, пожалуйста, скриншот или ссылку на ошибку.\n\n"
-                    . "Я соберу данные и сразу поставлю задачу в технический отдел.";
+                    . "3. Пришлите, пожалуйста, ссылку или скриншот ошибки.\n\n"
+                    . "Я соберу информацию и передам задачу в работу техническим специалистам.";
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
-                    . "• Клиент {$clientName} ({$companyTitle}) сообщил о проблеме: '{$text}'.\n"
-                    . "• Действие ИИ: уточнение деталей для постановки задачи по регламенту.\n"
+                    . "• Обращение с проблемой от KelvinMarty: '{$currentText}'.\n"
+                    . "• Действие ИИ: запрос недостающих деталей для заведения задачи по регламенту.\n"
                     . "(Агент в диалоге).";
 
                 return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
             }
 
-            // Постановка новой задачи по 6 пунктам корпоративного регламента
+            // Постановка задачи по регламенту
+            $project = $this->detectProject($lower, $companyTitle);
             $taskDate = date('d.m.Y');
             $deadline = date('Y-m-d 18:00:00', strtotime('+1 weekday'));
-            $taskSummary = $this->summarizeTask($text, $project['name']);
+            $taskSummary = $this->summarizeTask($currentText, $project['name']);
 
             $taskData = [
                 'project_group_name'  => $project['group_name'],
                 'task_summary'        => $taskSummary,
                 'task_date'           => $taskDate,
                 'plan_steps'          => [
-                    "Провести диагностику по обращению клиента {$clientName}",
-                    "Локализовать проблему на проекте {$project['name']}",
-                    "Выполнить доработки и провести тестирование",
-                    "Уведомить клиента в чате о завершении",
+                    "Диагностика обращения клиента {$clientName}",
+                    "Локализация сбоя на проекте {$project['name']}",
+                    "Внесение исправлений и проверка",
+                    "Уведомление клиента о результатах",
                 ],
-                'links'               => [
-                    "https://{$project['domain']}",
-                ],
-                'checklist'           => [
-                    "Проверка логов и воспроизведение",
-                    "Исправление и код-ревью",
-                    "Тестирование на проде и сдача клиенту",
-                ],
+                'links'               => ["https://{$project['domain']}"],
+                'checklist'           => ["Диагностика", "Исправление", "Тестирование и сдача"],
                 'responsible_id'      => self::OPERATOR_USER_ID,
                 'deadline'            => $deadline,
                 'time_estimate_hours' => 2.0,
@@ -486,46 +541,105 @@ class Line18AutoResponder
             $createRes = $this->taskService->createTask($taskData);
             if ($createRes['success'] && !empty($createRes['taskId'])) {
                 $taskId = $createRes['taskId'];
-                $publicReply = "Добрый день, {$clientName}! Ваше обращение зафиксировано и поставлено в работу.\n\n"
+                $publicReply = "Ваше обращение зафиксировано и поставлено в работу специалистам:\n\n"
                     . "• Задача №{$taskId}: «{$project['group_name']} | {$taskSummary} {$taskDate}»\n"
                     . "• Ответственный: Минаев Никита\n"
                     . "• Крайний срок: " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n\n"
-                    . "Специалисты приступают к выполнению. Если появятся дополнительные файлы или пояснения — направляйте прямо сюда.";
+                    . "Мы уже занимаемся вопросом. Если появятся дополнительные примеры или файлы — присылайте в этот чат.";
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
-                    . "• Создана задача №{$taskId}: «{$project['group_name']} | {$taskSummary} {$taskDate}»\n"
-                    . "• Клиент: {$clientName} ({$companyTitle})\n"
-                    . "• Ответственный: Минаев Никита, дедлайн: " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n"
-                    . "(Агент продолжает сопровождать диалог).";
+                    . "• Сформирована задача №{$taskId}: «{$project['group_name']} | {$taskSummary} {$taskDate}»\n"
+                    . "• Обращение от KelvinMarty: '{$currentText}'\n"
+                    . "• Дедлайн: " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n"
+                    . "(Агент ведет диалог).";
 
                 return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
             }
         }
 
-        // 2.3 Приветствие от действующего клиента
+        // =========================================================================
+        // ИНТЕНТ 6: ПРИВЕТСТВИЕ
+        // =========================================================================
         $isGreeting = str_contains($lower, 'привет') || str_contains($lower, 'здравствуй') || str_contains($lower, 'добрый день') || str_contains($lower, 'добрый вечер');
         if ($isGreeting) {
-            $publicReply = "Здравствуйте, {$clientName}! Рад приветствовать вас. Чем могу помочь по проектам компании «{$companyTitle}» сегодня?";
+            // Если бот УЖЕ здоровался ранее в диалоге — не повторяем шаблонное приветствие!
+            if ($alreadyIntroduced) {
+                $publicReply = "Да, я на связи! Чем могу помочь вам сейчас?";
+            } else {
+                $publicReply = "Здравствуйте, {$clientName}! Я ИИ-ассистент службы технической поддержки компании WAYDEV.\n\n"
+                    . "Чем могу помочь? Опишите, пожалуйста, ваш вопрос или задачу — я найду информацию либо подключу профильных специалистов.";
+                $this->state[$dialogId]['asked_identity'] = true;
+                $this->saveState();
+            }
+
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
-                . "• Клиент {$clientName} ({$companyTitle}) поприветствовал в чате: '{$text}'.\n"
-                . "• Агент ответил приветствием и запросил суть вопроса.";
+                . "• Приветствие от KelvinMarty: '{$currentText}'.\n"
+                . "(Агент ответил на приветствие).";
 
             return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
         }
 
-        // 2.4 Прочее сообщение
-        $publicReply = "Спасибо за информацию, {$clientName}! Сообщение принято в обработку. Я передал информацию ответственным специалистам. Если потребуется что-то уточнить — я сразу напишу вам здесь.";
+        // =========================================================================
+        // ИНТЕНТ 7: БЛАГОДАРНОСТЬ / ПОДТВЕРЖДЕНИЕ
+        // =========================================================================
+        $isThanks = str_contains($lower, 'спасибо') || str_contains($lower, 'благодар') || str_contains($lower, 'понял') || str_contains($lower, 'отлично') || str_contains($lower, 'хорошо');
+        if ($isThanks) {
+            $publicReply = "Пожалуйста! Если возникнут вопросы или потребуется помощь по сайту или Битрикс24 — обращайтесь, я всегда на связи.";
+            $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
+                . "Внимание, {$responsibleTag}!\n"
+                . "• Клиент поблагодарил: '{$currentText}'.\n"
+                . "(Диалог продолжается).";
+            return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
+        }
+
+        // =========================================================================
+        // ДЕФОЛТНЫЙ ОТВЕТ (УНИВЕРСАЛЬНЫЙ, БЕЗ СПАМА ШАБЛОНАМИ)
+        // =========================================================================
+        if ($alreadyAskedIdentity) {
+            $publicReply = "Принял ваше сообщение: «{$currentText}». Уточните, пожалуйста, детали задачи или проекта, чтобы я мог сразу передать вопрос ответственным специалистам.";
+        } else {
+            $publicReply = "Здравствуйте, {$clientName}! Ваше сообщение принято в обработку.\n\n"
+                . "Подскажите, какую компанию или проект вы представляете и какая задача перед нами стоит? Я передам информацию профильным специалистам.";
+            $this->state[$dialogId]['asked_identity'] = true;
+            $this->saveState();
+        }
+
         $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
             . "Внимание, {$responsibleTag}!\n"
-            . "• Сообщение от клиента {$clientName} ({$companyTitle}): '{$text}'.\n"
-            . "• Принято в обработку ИИ-агентом.";
+            . "• Сообщение от KelvinMarty: '{$currentText}'.\n"
+            . "• Статус в CRM: " . ($isClient ? "Клиент ({$companyTitle})" : "Не привязан к CRM") . "\n"
+            . "(Агент в диалоге).";
 
         return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
     }
 
-    private function detectProject(string $lower, string $companyTitle = ''): ?array
+    /**
+     * Попытка извлечь имя и компанию из естественного текста пользователя.
+     */
+    private function extractIdentityInfo(string $text): ?array
+    {
+        $res = [];
+        // Проверка компании
+        if (preg_match('/(?:компани[яи]|проект|из|представляю)\s+([«"][^»"]+[»"]|[a-zA-Zа-яА-Я0-9\.\-]+)/iu', $text, $m)) {
+            $comp = trim($m[1], " \t\n\r\0\x0B«»\"'");
+            if (mb_strlen($comp) > 2) {
+                $res['company'] = $comp;
+            }
+        }
+        // Проверка имени
+        if (preg_match('/(?:меня зовут|мое имя|я|зовут)\s+([а-яА-Яa-zA-Z]+)/iu', $text, $m)) {
+            $name = trim($m[1]);
+            if (mb_strlen($name) > 2 && !in_array(mb_strtolower($name), ['компания', 'проект', 'хотел', 'хочу', 'просто', 'тут'])) {
+                $res['name'] = $name;
+            }
+        }
+
+        return !empty($res) ? $res : null;
+    }
+
+    private function detectProject(string $lower, string $companyTitle = ''): array
     {
         $projects = [
             'kuzbank'     => ['name' => 'Банк Кузнецкий', 'group_name' => 'KUZBANK.RU', 'domain' => 'kuzbank.ru'],
