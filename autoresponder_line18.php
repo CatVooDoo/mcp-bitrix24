@@ -242,12 +242,22 @@ class Line18AutoResponder
         $savedCompany = $this->state[$dialogId]['identified_company'] ?? null;
         $savedName = $this->state[$dialogId]['identified_name'] ?? null;
 
+        // Санитизация имени: отсекаем любые стоп-слова
+        if ($savedName !== null) {
+            $savedLower = mb_strtolower(trim($savedName));
+            if (in_array($savedLower, self::STOP_WORDS_NAME, true) || mb_strlen($savedName) < 2) {
+                $savedName = null;
+                unset($this->state[$dialogId]['identified_name']);
+                $this->saveState();
+            }
+        }
+
         $isClient = (!empty($contact) || !empty($company) || !empty($lead) || !empty($savedCompany));
 
         $clientName = $savedName ?: 'Никита';
         if (!empty($contact)) {
             $cName = trim(($contact['NAME'] ?? '') . ' ' . ($contact['LAST_NAME'] ?? ''));
-            if ($cName !== '') {
+            if ($cName !== '' && !in_array(mb_strtolower($cName), self::STOP_WORDS_NAME, true)) {
                 $clientName = $cName;
             }
         }
@@ -472,13 +482,24 @@ class Line18AutoResponder
         // =========================================================================
         $isGreeting = str_contains($lower, 'привет') || str_contains($lower, 'здравствуй') || str_contains($lower, 'добрый день') || str_contains($lower, 'добрый вечер');
         if ($isGreeting) {
-            $publicReply = "Здравствуйте, {$clientName}! Я на связи. Чем могу помочь по вашему проекту или сайту?";
-            $internalNote = "🤖 [Внутренняя сводка ИИ]:\nВнимание, {$responsibleTag}!\n• Приветствие в чате.";
+            // Проверяем наличие активных задач в работе
+            $tasksRes = $this->taskService->getTasks(['responsible_id' => self::OPERATOR_USER_ID], 1);
+            $activeTask = !empty($tasksRes['tasks'][0]) ? $tasksRes['tasks'][0] : null;
+
+            if ($activeTask !== null && (int)($activeTask['status'] ?? 0) !== 5) {
+                $tId = $activeTask['id'] ?? ($activeTask['ID'] ?? '');
+                $tTitle = $activeTask['title'] ?? ($activeTask['TITLE'] ?? '');
+                $publicReply = "Добрый день, {$clientName}! Да, я на связи. По вашей задаче №{$tId} («{$tTitle}») специалисты уже занимаются вопросом. Подскажите, появились новые подробности или у вас другой вопрос?";
+            } else {
+                $publicReply = "Добрый день, {$clientName}! Я на связи, слушаю вас. Чем могу помочь сегодня?";
+            }
+
+            $internalNote = "🤖 [Внутренняя сводка ИИ]:\nВнимание, {$responsibleTag}!\n• Приветствие от {$clientName}.";
             return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
         }
 
-        // Дефолтный ответ
-        $publicReply = "Принял ваше сообщение, {$clientName}! Подскажите, пожалуйста, детали задачи или сайт/проект, по которому требуется помощь, чтобы я мог оперативно подключить профильных специалистов.";
+        // Дефолтный ответ (естественный и дружелюбный)
+        $publicReply = "Понял вас, {$clientName}. Уточните, пожалуйста, подробнее суть задачи или проекта, и я сразу передам информацию специалистам.";
         $internalNote = "🤖 [Внутренняя сводка ИИ]:\nВнимание, {$responsibleTag}!\n• Сообщение: '{$currentText}'.";
 
         return ['public_reply' => $publicReply, 'internal_note' => $internalNote];
