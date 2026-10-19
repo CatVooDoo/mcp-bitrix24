@@ -418,12 +418,24 @@ class TaskService
             ];
         }
 
+        // Теги задачи: обязательно добавляем 'ИИ-Агент' и любые переданные теги
+        $tags = ['ИИ-Агент'];
+        if (!empty($data['tags']) && is_array($data['tags'])) {
+            foreach ($data['tags'] as $tag) {
+                $t = trim((string)$tag);
+                if ($t !== '' && !in_array($t, $tags, true)) {
+                    $tags[] = $t;
+                }
+            }
+        }
+
         // Формирование полей tasks.task.add
         $fields = [
             'TITLE'               => $title,
             'DESCRIPTION'         => $description,
             'RESPONSIBLE_ID'      => $responsibleId,
             'GROUP_ID'            => $groupId,
+            'TAGS'                => $tags,
             'ALLOW_TIME_TRACKING' => 'Y',
             'TIME_ESTIMATE'       => $timeEstimateSeconds,
         ];
@@ -580,7 +592,7 @@ class TaskService
 
     /**
      * Формирование названия задачи по регламенту:
-     * "<Группа проектов> | <Смысл задачи> <Дата постановки DD.MM.YYYY>"
+     * "<Группа проектов> | <Смысл задачи> | <Дата постановки DD.MM.YYYY>"
      */
     private function buildTaskTitle(array $data): string
     {
@@ -589,7 +601,7 @@ class TaskService
         $taskSummary = trim((string)($data['task_summary'] ?? ''));
 
         if ($groupName !== '' && $taskSummary !== '') {
-            return "{$groupName} | {$taskSummary} {$dateStr}";
+            return "{$groupName} | {$taskSummary} | {$dateStr}";
         }
 
         $title = trim((string)($data['title'] ?? ''));
@@ -597,9 +609,9 @@ class TaskService
             return '';
         }
 
-        // Если дата в формате DD.MM.YYYY еще не присутствует в конце названия, добавляем ее
+        // Если дата в формате DD.MM.YYYY еще не присутствует в конце названия, добавляем ее с разделителем |
         if (!preg_match('/\b\d{2}\.\d{2}\.\d{4}\b$/', $title)) {
-            $title .= " {$dateStr}";
+            $title .= " | {$dateStr}";
         }
 
         // Если нет разделителя группы и группа указана, добавляем
@@ -633,6 +645,11 @@ class TaskService
                 $linksText .= "- {$link}\n";
             }
             $description .= $linksText;
+        }
+
+        // Обязательный тег задачи по регламенту
+        if (!str_contains($description, '##ИИ-Агент')) {
+            $description .= "\n\n##ИИ-Агент";
         }
 
         return $description;

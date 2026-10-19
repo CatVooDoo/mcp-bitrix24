@@ -412,6 +412,7 @@ class Line24AutoResponder
                 'project_group_name'  => $project['group_name'] ?? 'WAYDEV.RU',
                 'task_summary'        => $taskSummary,
                 'task_date'           => $taskDate,
+                'tags'                => ['ИИ-Агент'],
                 'plan_steps'          => [
                     "Провести первичную диагностику обращения клиента {$clientName}",
                     "Локализовать причину сбоя на проекте {$project['name']}",
@@ -446,7 +447,7 @@ class Line24AutoResponder
                 $taskId = $createRes['taskId'];
 
                 $publicReply = "Добрый день, {$clientName}! Ваше обращение зафиксировано и поставлено в работу специалистам.\n\n"
-                    . "• Задача №{$taskId}: «{$project['group_name']} | {$taskSummary} {$taskDate}»\n"
+                    . "• Задача №{$taskId}: «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
                     . "• Ответственный: Минаев Никита\n"
                     . "• Проект: {$project['group_name']} ({$project['domain']})\n"
                     . "• Крайний срок: " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n"
@@ -456,7 +457,7 @@ class Line24AutoResponder
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
                     . "• Поступило обращение от {$clientName}" . ($companyTitle ? " ({$companyTitle})" : "") . ": '{$text}'\n"
-                    . "• Сформирована задача №{$taskId}: «{$project['group_name']} | {$taskSummary} {$taskDate}»\n"
+                    . "• Сформирована задача №{$taskId}: «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
                     . "• Ответственный: Минаев Никита, дедлайн: " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n"
                     . "• Клиенту предоставлен подтверждающий ответ со сроками.\n"
                     . "(Агент продолжает самостоятельно сопровождать диалог в чате).";

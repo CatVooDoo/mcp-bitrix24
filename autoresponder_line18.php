@@ -324,6 +324,7 @@ class Line18AutoResponder
                 'project_group_name'  => $project['group_name'],
                 'task_summary'        => $taskSummary,
                 'task_date'           => $taskDate,
+                'tags'                => ['ИИ-Агент'],
                 'description'         => "Критический инцидент / задача от клиента в открытой линии:\n{$currentText}\n\nПлан действий:\n1. Провести первичную диагностику и локализацию сбоя на {$project['domain']}\n2. Выполнить восстановительные работы и исправления\n3. Провести тестирование и убедиться в работоспособности\n4. Уведомить клиента в чате открытой линии",
                 'plan_steps'          => [
                     "Диагностика сбоя на проекте {$project['name']}",
@@ -354,7 +355,7 @@ class Line18AutoResponder
                 $taskId = $createRes['taskId'];
 
                 $publicReply = "Принято в работу! Зафиксировал задачу по обращению:\n\n"
-                    . "• **Задача №{$taskId}:** «{$project['group_name']} | {$taskSummary} {$taskDate}»\n"
+                    . "• **Задача №{$taskId}:** «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
                     . "• **Проект:** {$project['domain']}\n"
                     . "• **Ответственный специалист:** Минаев Никита\n"
                     . "• **Приоритет:** Срочно (инцидент)\n"
@@ -364,7 +365,7 @@ class Line18AutoResponder
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
                     . "• [b][КРИТИЧЕСКИЙ ИНЦИДЕНТ / ЗАДАЧА][/b]\n"
-                    . "• Сформирована задача №{$taskId}: «{$project['group_name']} | {$taskSummary} {$taskDate}»\n"
+                    . "• Сформирована задача №{$taskId}: «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
                     . "• Текст клиента: '{$currentText}'\n"
                     . "• Ответственный: Минаев Никита, дедлайн: сегодня до 19:00\n"
                     . "(Агент продолжает сопровождать диалог).";
