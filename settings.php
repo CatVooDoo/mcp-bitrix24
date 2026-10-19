@@ -21,7 +21,8 @@ if (!defined('C_REST_LOGS_DIR')) {
     define('C_REST_LOGS_DIR', __DIR__ . '/logs/crest/');
 }
 if (!defined('C_REST_IGNORE_SSL')) {
-    define('C_REST_IGNORE_SSL', false);
+    $ignoreSsl = getenv('C_REST_IGNORE_SSL');
+    define('C_REST_IGNORE_SSL', $ignoreSsl !== false ? filter_var($ignoreSsl, FILTER_VALIDATE_BOOLEAN) : true);
 }
 
 // --- Bitrix24 MCP Gateway & Webhook Constants ---
