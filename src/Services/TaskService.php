@@ -13,6 +13,10 @@ use Bitrix24Mcp\Core\Logger;
  */
 class TaskService
 {
+    // Current test routing policy explicitly requested by the workspace owner.
+    public const AGENT_RESPONSIBLE_ID = 1650;
+    public const AGENT_AUDITOR_ID = 1;
+
     public const STATUS_MAP = [
         1 => 'Новая',
         2 => 'Ждет выполнения',
@@ -382,6 +386,12 @@ class TaskService
      */
     public function createTask(array $data): array
     {
+        $data['responsible_id'] = self::AGENT_RESPONSIBLE_ID;
+        $data['auditors'] = array_values(array_unique(array_merge(
+            array_map('intval', (array)($data['auditors'] ?? [])),
+            [self::AGENT_AUDITOR_ID]
+        )));
+
         // 1. Формирование названия задачи по регламенту
         $title = $this->buildTaskTitle($data);
         if ($title === '') {
