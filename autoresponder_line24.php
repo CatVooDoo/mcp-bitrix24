@@ -17,6 +17,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/src/Core/Bootstrap.php';
 
 use Bitrix24Mcp\Core\Bootstrap;
+use Bitrix24Mcp\Core\Config;
 use Bitrix24Mcp\Core\Logger;
 use Bitrix24Mcp\Services\ChatService;
 use Bitrix24Mcp\Services\TaskService;
@@ -320,12 +321,13 @@ class Line24AutoResponder
                 $tStatus = $matchedTask['statusText'] ?? 'В работе';
                 $tDeadline = !empty($matchedTask['DEADLINE']) ? date('d.m.Y H:i', strtotime($matchedTask['DEADLINE'])) : 'Уточняется';
 
-                $publicReply = "Здравствуйте, {$clientName}!\n\n"
-                    . "По вашей задаче №{$tId} («{$tTitle}»):\n"
-                    . "• Текущий статус: {$tStatus}\n"
-                    . "• Ответственный: Минаев Никита\n"
-                    . "• Крайний срок: {$tDeadline}\n\n"
-                    . "Задача находится на контроле специалистов. Как только появятся результаты или обновления, я сразу напишу вам сюда.";
+                $publicReply = Config::getRendered('dialog_templates', 'task_status.active', [
+                    'task_id'          => $tId,
+                    'task_title'       => $tTitle,
+                    'status'           => $tStatus,
+                    'responsible_name' => 'Минаев Никита',
+                    'deadline'         => $tDeadline,
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -363,11 +365,9 @@ class Line24AutoResponder
 
             if (!$hasEnoughDetails) {
                 // Если деталей мало, вежливо уточняем у клиента подробности
-                $publicReply = "Здравствуйте, {$clientName}! Подскажите, пожалуйста, подробнее:\n"
-                    . "1. На каком именно сайте/странице возникла сложность?\n"
-                    . "2. Что конкретно работает некорректно и какой результат ожидается?\n"
-                    . "3. Если есть возможность, пришлите ссылку или скриншот ошибки.\n\n"
-                    . "Я соберу все технические детали и сразу сформирую задачу ответственным специалистам.";
+                $publicReply = Config::getRendered('dialog_templates', 'clarification_needed.incident', [
+                    'client_name' => $clientName,
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -386,12 +386,12 @@ class Line24AutoResponder
                 $eStatus = $existingTask['statusText'] ?? 'В работе';
                 $eDeadline = !empty($existingTask['DEADLINE']) ? date('d.m.Y H:i', strtotime($existingTask['DEADLINE'])) : 'Уточняется';
 
-                $publicReply = "Добрый день, {$clientName}! Задача по этому обращению уже зафиксирована и находится в работе:\n\n"
-                    . "• Задача №{$eId}: «{$eTitle}»\n"
-                    . "• Ответственный: Минаев Никита\n"
-                    . "• Статус: {$eStatus}\n"
-                    . "• Крайний срок: {$eDeadline}\n\n"
-                    . "Специалисты уже занимаются вопросом. Если появились новые данные, файлы или примеры — присылайте прямо сюда, я прикреплю их к задаче.";
+                $publicReply = Config::getRendered('dialog_templates', 'task_already_active.default', [
+                    'task_id'          => $eId,
+                    'task_title'       => $eTitle,
+                    'responsible_name' => 'Минаев Никита',
+                    'deadline'         => $eDeadline,
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -446,13 +446,13 @@ class Line24AutoResponder
             if ($createRes['success'] && !empty($createRes['taskId'])) {
                 $taskId = $createRes['taskId'];
 
-                $publicReply = "Добрый день, {$clientName}! Ваше обращение зафиксировано и поставлено в работу специалистам.\n\n"
-                    . "• Задача №{$taskId}: «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
-                    . "• Ответственный: Минаев Никита\n"
-                    . "• Проект: {$project['group_name']} ({$project['domain']})\n"
-                    . "• Крайний срок: " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n"
-                    . "• Чек-лист диагностических работ сформирован\n\n"
-                    . "Мы проведем диагностику и выполним необходимые работы. Если появятся дополнительные файлы или уточнения — направляйте в этот чат, я добавлю в задачу.";
+                $publicReply = Config::getRendered('dialog_templates', 'task_created.public_confirmation', [
+                    'task_id'          => $taskId,
+                    'task_title'       => "{$project['group_name']} | {$taskSummary} | {$taskDate}",
+                    'project_domain'   => $project['domain'],
+                    'responsible_name' => 'Минаев Никита',
+                    'deadline'         => date('d.m.Y, 18:00', strtotime($deadline)),
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -469,8 +469,9 @@ class Line24AutoResponder
         // 3. Общие вопросы, приветствия или консультации
         $isGreeting = str_contains($lower, 'привет') || str_contains($lower, 'здравствуй') || str_contains($lower, 'добрый день') || str_contains($lower, 'добрый вечер');
         if ($isGreeting) {
-            $publicReply = "Здравствуйте, {$clientName}! Я ИИ-ассистент компании WAYDEV.\n"
-                . "Чем могу помочь по вашему проекту? Опишите, пожалуйста, вопрос или задачу — я найду информацию в системе либо поставлю задачу специалистам.";
+            $publicReply = Config::getRendered('dialog_templates', 'greetings.default', [
+                'client_name' => $clientName,
+            ]);
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
@@ -483,7 +484,9 @@ class Line24AutoResponder
         }
 
         // 4. Прочее сообщение
-        $publicReply = "Спасибо за информацию, {$clientName}! Ваше сообщение принято в обработку. Я зафиксировал обращение и передал информацию ответственным специалистам. Если потребуется что-то уточнить — напишу вам здесь.";
+        $publicReply = Config::getRendered('dialog_templates', 'fallback.general', [
+            'current_text' => $text,
+        ]);
 
         $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
             . "Внимание, {$responsibleTag}!\n"

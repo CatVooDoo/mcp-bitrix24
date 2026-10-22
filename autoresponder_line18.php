@@ -22,6 +22,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/src/Core/Bootstrap.php';
 
 use Bitrix24Mcp\Core\Bootstrap;
+use Bitrix24Mcp\Core\Config;
 use Bitrix24Mcp\Core\Logger;
 use Bitrix24Mcp\Services\ChatService;
 use Bitrix24Mcp\Services\TaskService;
@@ -377,17 +378,18 @@ class Line18AutoResponder
                 $isPortfolio = (str_contains(mb_strtolower($activeTaskTitle), 'портфолио') || str_contains($lower, 'портфолио'));
 
                 if ($isPortfolio) {
-                    $publicReply = "По вашей задаче №{$activeTaskId} («{$activeTaskTitle}»):\n\n"
-                        . "• **Плановый дедлайн:** завтра, 20 октября, до 18:00.\n"
-                        . "• **Трудоёмкость:** около 1 рабочего дня (2–4 рабочих часа на вёрстку, адаптацию и наполнение блоков портфолио).\n"
-                        . "• **Условие старта:** срок отсчитывается с момента предоставления ссылки на Яндекс.Диск с материалами. Как только пришлёте файлы — Никита Минаев сразу начинает реализацию.\n\n"
-                        . "Если файлы отправите сегодня — постараемся сдать даже раньше!";
+                    $publicReply = Config::getRendered('dialog_templates', 'deadlines.portfolio', [
+                        'task_id' => $activeTaskId,
+                        'task_title' => $activeTaskTitle,
+                    ]);
                 } else {
-                    $publicReply = "По вашей задаче №{$activeTaskId} («{$activeTaskTitle}»):\n\n"
-                        . "• **Плановый дедлайн:** {$activeTaskDeadlineFormatted}\n"
-                        . "• **Статус:** {$activeTaskStatus}\n"
-                        . "• **Ответственный специалист:** Минаев Никита\n\n"
-                        . "Специалисты держат задачу на контроле. О любых этапах готовности я сразу сообщу вам сюда!";
+                    $publicReply = Config::getRendered('dialog_templates', 'deadlines.general', [
+                        'task_id' => $activeTaskId,
+                        'task_title' => $activeTaskTitle,
+                        'deadline' => $activeTaskDeadlineFormatted,
+                        'status' => $activeTaskStatus,
+                        'responsible_name' => 'Минаев Никита',
+                    ]);
                 }
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
@@ -414,11 +416,13 @@ class Line18AutoResponder
 
         if ($isStatusQuestion) {
             if ($activeTaskId > 0) {
-                $publicReply = "По вашей задаче №{$activeTaskId} («{$activeTaskTitle}»):\n\n"
-                    . "• **Текущий статус:** {$activeTaskStatus}\n"
-                    . "• **Ответственный специалист:** Минаев Никита\n"
-                    . "• **Крайний срок:** {$activeTaskDeadlineFormatted}\n\n"
-                    . "Задача зафиксирована и находится в работе. О любых обновлениях или завершении я сразу отпишусь в этот чат!";
+                $publicReply = Config::getRendered('dialog_templates', 'task_status.active', [
+                    'task_id' => $activeTaskId,
+                    'task_title' => $activeTaskTitle,
+                    'status' => $activeTaskStatus,
+                    'responsible_name' => 'Минаев Никита',
+                    'deadline' => $activeTaskDeadlineFormatted,
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -453,9 +457,12 @@ class Line18AutoResponder
                 $commentText = "Клиент предоставил материалы в чате Открытой линии Telegram:\n" . $currentText;
                 $this->taskService->addComment($activeTaskId, $commentText);
 
-                $publicReply = "Отлично, материалы принял и зафиксировал! Прикрепил ссылку к задаче №{$activeTaskId} («{$activeTaskTitle}»).\n\n"
-                    . "Никита Минаев и команда уже приступают к реализации. Плановый дедлайн: {$activeTaskDeadlineFormatted}.\n\n"
-                    . "Как только портфолио будет размещено и проверено — сразу сообщу вам сюда!";
+                $publicReply = Config::getRendered('dialog_templates', 'materials_received.success', [
+                    'task_id' => $activeTaskId,
+                    'task_title' => $activeTaskTitle,
+                    'responsible_name' => 'Никита Минаев',
+                    'deadline' => $activeTaskDeadlineFormatted,
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -480,8 +487,7 @@ class Line18AutoResponder
         );
 
         if ($isResponsibleQuestion) {
-            $publicReply = "Ответственный специалист и ведущий исполнитель по вашей задаче — **Минаев Никита** (ведущий разработчик WAYDEV, [USER=1650]).\n\n"
-                . "Он лично курирует проект и выполняет работы. Я непрерывно нахожусь на связи и передаю любые ваши комментарии и материалы напрямую Никите.";
+            $publicReply = Config::getRendered('dialog_templates', 'responsible_info.default');
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
@@ -507,10 +513,7 @@ class Line18AutoResponder
         );
 
         if ($isCostQuestion) {
-            $publicReply = "По стоимости выполнения работ:\n\n"
-                . "• **Для клиентов на абонентском сопровождении / техподдержке:** часы автоматически списываются из ежемесячного пакета (по текущей задаче ориентир около 2–4 нормо-часов).\n"
-                . "• **При проектной / разовой оплате:** после получения материалов с Яндекс.Диска Никита Минаев согласует с вами точную фиксированную смету до начала активных работ.\n\n"
-                . "Подскажите, у вас действует абонентский договор или планируется разовая оплата по факту?";
+            $publicReply = Config::getRendered('dialog_templates', 'cost_and_estimates.options');
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
@@ -531,7 +534,9 @@ class Line18AutoResponder
         );
 
         if ($isShortAck) {
-            $publicReply = "Пожалуйста, {$clientName}! Задача зафиксирована и находится на контроле. Буду ждать ссылку на материалы с Яндекс.Диска. Если появятся вопросы или дополнения — сразу пишите сюда, я на связи!";
+            $publicReply = Config::getRendered('dialog_templates', 'short_ack.default', [
+                'client_name' => $clientName,
+            ]);
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
@@ -588,11 +593,12 @@ class Line18AutoResponder
             }
 
             if ($alreadyHandled) {
-                $publicReply = "Эта задача уже поставлена и находится в активной работе:\n\n"
-                    . "• **Задача №{$activeTaskId}:** «{$activeTaskTitle}»\n"
-                    . "• **Ответственный специалист:** Минаев Никита\n"
-                    . "• **Крайний срок:** {$activeTaskDeadlineFormatted}\n\n"
-                    . "Ожидаю ссылку на материалы с Яндекс.Диска, чтобы специалисты приступили к вёрстке!";
+                $publicReply = Config::getRendered('dialog_templates', 'task_already_active.default', [
+                    'task_id' => $activeTaskId,
+                    'task_title' => $activeTaskTitle,
+                    'responsible_name' => 'Минаев Никита',
+                    'deadline' => $activeTaskDeadlineFormatted,
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -646,12 +652,13 @@ class Line18AutoResponder
                 $this->state[$dialogId]['active_project_domain'] = $project['domain'];
                 $this->saveState();
 
-                $publicReply = "Принято в работу! Зафиксировал задачу по регламенту:\n\n"
-                    . "• **Задача №{$taskId}:** «{$project['group_name']} | {$taskSummary} | {$taskDate}»\n"
-                    . "• **Проект:** {$project['domain']}\n"
-                    . "• **Ответственный специалист:** Минаев Никита\n"
-                    . "• **Крайний срок:** " . date('d.m.Y, 18:00', strtotime($deadline)) . "\n\n"
-                    . "Специалисты подключаются к работе. О ходе выполнения и результатах сразу сообщу вам сюда!";
+                $publicReply = Config::getRendered('dialog_templates', 'task_created.public_confirmation', [
+                    'task_id' => $taskId,
+                    'task_title' => "{$project['group_name']} | {$taskSummary} | {$taskDate}",
+                    'project_domain' => $project['domain'],
+                    'responsible_name' => 'Минаев Никита',
+                    'deadline' => date('d.m.Y, 18:00', strtotime($deadline)),
+                ]);
 
                 $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                     . "Внимание, {$responsibleTag}!\n"
@@ -678,13 +685,7 @@ class Line18AutoResponder
         );
 
         if ($isServicesInquiry) {
-            $publicReply = "Компания WAYDEV специализируется на веб-разработке, внедрении цифровых решений и технической поддержке бизнеса:\n\n"
-                . "1. **Битрикс24:** внедрение CRM, смарт-процессы, интеграция с 1С, телефонией, мессенджерами (Telegram, WhatsApp).\n"
-                . "2. **Веб-разработка:** разработка корпоративных сайтов, порталов и интернет-магазинов (1С-Битрикс, Laravel, React/Vue).\n"
-                . "3. **Техническая поддержка и SLA:** круглосуточный мониторинг, L1/L2 поддержка, доработки по ТЗ и устранение сбоев.\n"
-                . "4. **Мобильная разработка:** iOS и Android.\n"
-                . "5. **ИИ-интеграции:** разработка AI-ассистентов, ботов техподдержки и интеграция нейросетей в бизнес.\n\n"
-                . "Подскажите, какая задача или проект актуальны для вас сейчас?";
+            $publicReply = Config::getRendered('dialog_templates', 'services_overview.full');
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
@@ -709,8 +710,10 @@ class Line18AutoResponder
             }
             $this->saveState();
 
-            $publicReply = "Очень приятно познакомиться, {$clientName}!" . ($companyTitle ? " (компания {$companyTitle})" : "") . "\n\n"
-                . "Я зафиксировал ваши контакты. Чем могу помочь вам сегодня?";
+            $publicReply = Config::getRendered('dialog_templates', 'identity_greeting.default', [
+                'client_name' => $clientName,
+                'company_suffix' => $companyTitle ? " (компания {$companyTitle})" : "",
+            ]);
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"
                 . "Внимание, {$responsibleTag}!\n"
@@ -726,9 +729,15 @@ class Line18AutoResponder
         $isGreeting = str_contains($lower, 'привет') || str_contains($lower, 'здравствуй') || str_contains($lower, 'добрый день') || str_contains($lower, 'добрый вечер') || str_contains($lower, 'салют');
         if ($isGreeting) {
             if ($activeTaskId > 0) {
-                $publicReply = "Добрый день, {$clientName}! Да, я на связи. По вашей задаче №{$activeTaskId} («{$activeTaskTitle}») всё под контролем у специалистов. Подскажите, появились новые подробности или у вас другой вопрос?";
+                $publicReply = Config::getRendered('dialog_templates', 'greetings.with_active_task', [
+                    'client_name' => $clientName,
+                    'task_id' => $activeTaskId,
+                    'task_title' => $activeTaskTitle,
+                ]);
             } else {
-                $publicReply = "Добрый день, {$clientName}! Я на связи, слушаю вас. Чем могу помочь сегодня?";
+                $publicReply = Config::getRendered('dialog_templates', 'greetings.default', [
+                    'client_name' => $clientName,
+                ]);
             }
 
             $internalNote = "🤖 [Внутренняя сводка ИИ]:\nВнимание, {$responsibleTag}!\n• Приветствие от {$clientName}.";
@@ -739,12 +748,15 @@ class Line18AutoResponder
         // ПРИОРИТЕТ 11: УМНЫЙ КОНТЕКСТНЫЙ ФОЛЛБЕК (БЕЗ ШАБЛОННОГО ЗАЦИКЛИВАНИЯ!)
         // =========================================================================
         if ($activeTaskId > 0) {
-            $publicReply = "Принял ваше сообщение: «{$currentText}».\n\n"
-                . "Зафиксировал и передал информацию ведущему разработчику Никите Минаеву ([USER=1650]) в контексте задачи №{$activeTaskId} («{$activeTaskTitle}»).\n\n"
-                . "Если потребуется что-то уточнить — мы сразу напишем вам сюда!";
+            $publicReply = Config::getRendered('dialog_templates', 'fallback.with_active_task', [
+                'current_text' => $currentText,
+                'task_id' => $activeTaskId,
+                'task_title' => $activeTaskTitle,
+            ]);
         } else {
-            $publicReply = "Принял ваше сообщение: «{$currentText}».\n\n"
-                . "Передал информацию специалистам и Никите Минаеву ([USER=1650]). Сейчас ознакомимся с деталями и вернемся к вам с ответом.";
+            $publicReply = Config::getRendered('dialog_templates', 'fallback.general', [
+                'current_text' => $currentText,
+            ]);
         }
 
         $internalNote = "🤖 [Внутренняя сводка ИИ]:\n"

@@ -13,8 +13,15 @@ use Bitrix24Mcp\Core\Logger;
  */
 class TaskService
 {
-    // Current test routing policy explicitly requested by the workspace owner.
-    public const AGENT_RESPONSIBLE_ID = 1650;
+    // Регламент ролей в задачах:
+    // Постановщик всегда 612 (Валерия Богомолова)
+    // Наблюдатели всегда 1650 (Никита Минаев) и 1 (Андрей Акифьев)
+    public const TASK_CREATOR_ID = 612;
+    public const TASK_AUDITOR_IDS = [1650, 1];
+    public const DEFAULT_RESPONSIBLE_ID = 882; // Олег Тихов (Project Manager)
+
+    // Обратная совместимость для старых вызовов
+    public const AGENT_RESPONSIBLE_ID = 882;
     public const AGENT_AUDITOR_ID = 1;
 
     public const STATUS_MAP = [
@@ -386,10 +393,18 @@ class TaskService
      */
     public function createTask(array $data): array
     {
-        $data['responsible_id'] = self::AGENT_RESPONSIBLE_ID;
+        // Постановщик всегда 612 (Валерия Богомолова) по регламенту компании
+        $data['created_by'] = self::TASK_CREATOR_ID;
+
+        // Исполнитель: если передан явно — используем его, иначе ответственный по умолчанию (882)
+        if (empty($data['responsible_id'])) {
+            $data['responsible_id'] = self::DEFAULT_RESPONSIBLE_ID;
+        }
+
+        // Наблюдатели: 1650 (Никита Минаев) и 1 (Андрей Акифьев) всегда входят в наблюдатели
         $data['auditors'] = array_values(array_unique(array_merge(
             array_map('intval', (array)($data['auditors'] ?? [])),
-            [self::AGENT_AUDITOR_ID]
+            self::TASK_AUDITOR_IDS
         )));
 
         // 1. Формирование названия задачи по регламенту
@@ -472,6 +487,7 @@ class TaskService
             'TITLE'               => $title,
             'DESCRIPTION'         => $description,
             'RESPONSIBLE_ID'      => $responsibleId,
+            'CREATED_BY'          => self::TASK_CREATOR_ID,
             'GROUP_ID'            => $groupId,
             'TAGS'                => $tags,
             'ALLOW_TIME_TRACKING' => 'Y',
@@ -480,10 +496,6 @@ class TaskService
 
         if ($deadline !== '') {
             $fields['DEADLINE'] = $deadline;
-        }
-
-        if (!empty($data['created_by'])) {
-            $fields['CREATED_BY'] = (int)$data['created_by'];
         }
 
         if (!empty($data['accomplices']) && is_array($data['accomplices'])) {

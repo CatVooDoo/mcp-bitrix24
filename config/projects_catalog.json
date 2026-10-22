@@ -1,0 +1,55 @@
+{
+  "stop_words": [
+    "помощь", "проблема", "ошибка", "задача", "вопрос", "сайт", "портал",
+    "битрикс", "телефония", "срочно", "пожалуйста", "клиент", "пользователь",
+    "разработчик", "сервер", "проект", "компания", "синхронизация", "хотел",
+    "хочу", "нужно", "сделать", "переподключить", "тест", "демо", "провайдер"
+  ],
+  "projects": {
+    "waydev": {
+      "name": "WAYDEV",
+      "group_name": "WAYDEV.RU",
+      "group_id": 99,
+      "domain": "waydev.ru",
+      "is_internal": true
+    },
+    "kuzbank": {
+      "name": "Банк Кузнецкий",
+      "group_name": "KUZBANK.RU",
+      "group_id": 31,
+      "domain": "kuzbank.ru"
+    },
+    "mastervodi": {
+      "name": "Мастер Воды",
+      "group_name": "MASTERVODI.RU",
+      "group_id": 265,
+      "domain": "mastervodi.ru"
+    },
+    "geotek": {
+      "name": "НПП Геотек",
+      "group_name": "NPP-GEOTEK.COM",
+      "domain": "npp-geotek.ru"
+    },
+    "penzaoblgaz": {
+      "name": "Пензаоблгаз",
+      "group_name": "WAYDEV.RU",
+      "group_id": 99,
+      "domain": "penzaoblgaz.ru"
+    },
+    "fillini": {
+      "name": "Филлини",
+      "group_name": "FILLINI.RU",
+      "domain": "fillini.ru"
+    },
+    "lubidom": {
+      "name": "Любимый Дом",
+      "group_name": "LUBIDOM.RU",
+      "domain": "lubidom.ru"
+    },
+    "yasenevo": {
+      "name": "Ясенево",
+      "group_name": "YASENEVO.HOMES",
+      "domain": "yasenevo.homes"
+    }
+  }
+}
