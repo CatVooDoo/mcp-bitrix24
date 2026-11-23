@@ -300,7 +300,7 @@ class Worker
             $id=(int)($m['author_id'] ?? 0);
             $identity=$this->cases->store->get('source_cursors','identity');
             $actor=(int)($identity['data']['actor_id'] ?? $this->cases->policy->get('actor_id',0));
-            if ($id===$actor || !empty($m['system'])) { continue; }
+            if ($id<=0 || $id===$actor || !empty($m['system'])) { continue; }
             if ($this->cases->policy->employee($id)) {
                 $this->cases->store->update('cases',$case,$case['data'],'HUMAN_OWNED'); return false;
             }
