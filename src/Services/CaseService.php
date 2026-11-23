@@ -22,7 +22,7 @@ final class CaseService
             // Reserve identity first: simultaneous webhook/poll ingestion cannot both update the case.
             if (!$existing && !$this->store->insert('inbox_events',$eventId,$event,'received')) { return $this->store->get('inbox_events',$eventId); }
             $row = $existing ?? $this->store->get('inbox_events',$eventId);
-            if ($this->ownMessage($event) || !empty($event['system']) || !empty($event['bot'])) {
+            if ($this->ownMessage($event) || !empty($event['system']) || !empty($event['bot']) || ($event['source']==='chat' && (int)$event['author_id']<=0)) {
                 return $this->store->update('inbox_events',$row,$event,'ignored');
             }
             $request = $this->matchEmployeeReply($event);

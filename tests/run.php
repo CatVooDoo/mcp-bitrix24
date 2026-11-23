@@ -203,6 +203,8 @@ $tests['openline prefix allows matching dialogs and rejects other lines']=functi
     check($rejected['status']==='unmatched');
     $accepted=$cases->ingest(['source'=>'chat','dialog_id'=>'chat1994','message_id'=>'2','author_id'=>380,'text'=>'Hello waydev_bot','openline_entity_id'=>'telegrambot|2|352465657|380']);
     check($accepted['status']==='ready');
+    $sysZero=$cases->ingest(['source'=>'chat','dialog_id'=>'chat1994','message_id'=>'3','author_id'=>0,'text'=>'[USER=1650] начал работу с диалогом','openline_entity_id'=>'telegrambot|2|352465657|380']);
+    check($sysZero['status']==='ignored');
     $cases->store->insert('source_cursors','openline_dialog:chat1994',['dialog_id'=>'chat1994','entity_id'=>'telegrambot|2|352465657|380'],'done');
     $cases->policy->external('chat1994',$cases->store);
     $denied=false; try{$cases->policy->external('chat17478',$cases->store);}catch(DomainException){$denied=true;} check($denied);
