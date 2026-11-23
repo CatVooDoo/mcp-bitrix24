@@ -1,17 +1,10 @@
 {
   "portal_id": "primary",
-  "external_dialogs": [
-    "chat17478",
-    "chat18042"
+  "external_dialogs": [],
+  "external_authors": {},
+  "external_openline_prefixes": [
+    "telegrambot|2|"
   ],
-  "external_authors": {
-    "chat17478": [
-      1712
-    ],
-    "chat18042": [
-      1742
-    ]
-  },
   "internal_dialogs": [],
   "employee_ids": [
     612,

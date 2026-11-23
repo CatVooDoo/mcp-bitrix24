@@ -16,12 +16,13 @@ class Monitor
             $r=$this->api->call('profile');
             if (!empty($r['success'])) { $s->insert('source_cursors','identity',['actor_id'=>(int)($r['result']['ID'] ?? 0)],'done'); }
         }
-        $dialogs=array_merge($this->cases->policy->get('external_dialogs',[]),$this->cases->policy->get('internal_dialogs',[]));
+        $openlineDialogs=$this->discoverOpenLineDialogs($errors);
+        $dialogs=array_merge($this->cases->policy->get('external_dialogs',[]),$this->cases->policy->get('internal_dialogs',[]),array_keys($openlineDialogs));
         foreach ($s->all('employee_requests','waiting') as $r) {
             if (($r['data']['channel'] ?? '')!=='task') { $dialogs[]=$r['data']['dialog_id']; }
         }
         foreach (array_unique($dialogs) as $dialog) {
-            try { $count+=$this->dialog((string)$dialog); } catch (\Throwable $e) { $errors[$dialog]=$e->getMessage(); }
+            try { $count+=$this->dialog((string)$dialog,null,$openlineDialogs[(string)$dialog] ?? null); } catch (\Throwable $e) { $errors[$dialog]=$e->getMessage(); }
         }
         $taskIds=$this->cases->policy->get('task_ids',[]);
         foreach ($s->all('cases',null) as $case) { if (!empty($case['data']['task_id'])) { $taskIds[]=(int)$case['data']['task_id']; } }
@@ -35,7 +36,7 @@ class Monitor
         if ($old) { $s->update('source_cursors',$old,$value,'done'); } else { $s->insert('source_cursors','monitor_health',$value,'done'); }
         return $value;
     }
-    public function dialog(string $dialog, ?int $taskId=null): int
+    public function dialog(string $dialog, ?int $taskId=null, ?string $openlineEntityId=null): int
     {
         $s=$this->cases->store; $key='dialog:'.hash('sha256',$dialog); $cursor=$s->get('source_cursors',$key);
         $boundary=(int)($cursor['data']['message_id'] ?? 0); $last=null; $messages=[]; $count=0;
@@ -59,9 +60,11 @@ class Monitor
         if (!$initialNew || $activeWait || $taskId!==null) {
             foreach ($messages as $m) {
                 $system=in_array($m['system'] ?? $m['params']['SYSTEM'] ?? false,[true,1,'1','Y'],true);
-                $this->cases->ingest(['source'=>'chat','dialog_id'=>$dialog,'message_id'=>(string)$m['id'],
+                $event=['source'=>'chat','dialog_id'=>$dialog,'message_id'=>(string)$m['id'],
                     'author_id'=>(int)($m['author_id'] ?? 0),'text'=>(string)($m['text'] ?? ''),
-                    'occurred_at'=>strtotime((string)($m['date'] ?? '')) ?: time(),'reply_to'=>$m['reply_id'] ?? $m['params']['REPLY_ID'] ?? null,'files'=>$m['params']['FILE_ID'] ?? [],'system'=>$system,'task_id'=>$taskId]);
+                    'occurred_at'=>strtotime((string)($m['date'] ?? '')) ?: time(),'reply_to'=>$m['reply_id'] ?? $m['params']['REPLY_ID'] ?? null,'files'=>$m['params']['FILE_ID'] ?? [],'system'=>$system,'task_id'=>$taskId];
+                if ($openlineEntityId!==null) { $event['openline_entity_id']=$openlineEntityId; }
+                $this->cases->ingest($event);
                 $count++;
             }
         }
@@ -156,5 +159,71 @@ class Monitor
         $data=['timestamp'=>$until,'mailbox_id'=>$mailbox];
         if ($cursor) { $s->update('source_cursors',$cursor,$data,'done'); } else { $s->insert('source_cursors',$key,$data,'done'); }
         return $count;
+    }
+    /** Discover OpenLine dialogs matching configured external_openline_prefixes. */
+    private function discoverOpenLineDialogs(array &$errors): array
+    {
+        if (empty($this->cases->policy->get('external_openline_prefixes', []))) { return []; }
+        $found = [];
+        try {
+            $recent = $this->api->call('im.recent.get', ['SKIP_OPENLINES' => 'N']);
+            foreach ($recent['result']['items'] ?? [] as $item) {
+                $chat = $item['chat'] ?? [];
+                $entityId = (string)($chat['entity_id'] ?? '');
+                $dialogId = (string)($item['id'] ?? '');
+                if ($dialogId !== '' && ($chat['entity_type'] ?? '') === 'LINES' && $this->cases->policy->externalOpenLineAllowed($entityId)) {
+                    $this->registerOpenLineDialog($dialogId, $entityId);
+                    $found[$dialogId] = $entityId;
+                }
+            }
+        } catch (\Throwable $e) { $errors['openlines_recent'] = $e->getMessage(); }
+        try {
+            $acts = $this->api->call('crm.activity.list', [
+                'order' => ['ID' => 'DESC'],
+                'filter' => ['PROVIDER_ID' => 'IMOPENLINES_SESSION'],
+                'select' => ['ID', 'PROVIDER_PARAMS'],
+            ]);
+            $s = $this->cases->store;
+            foreach ($acts['result'] ?? [] as $act) {
+                $userCode = (string)($act['PROVIDER_PARAMS']['USER_CODE'] ?? '');
+                if (!$this->cases->policy->externalOpenLineAllowed($userCode)) { continue; }
+                $ucKey = 'openline_user_code:' . hash('sha256', $userCode);
+                $cached = $s->get('source_cursors', $ucKey);
+                $dialogId = (string)($cached['data']['dialog_id'] ?? '');
+                if ($dialogId === '' || (time() - (int)($cached['data']['checked_at'] ?? 0)) >= 600) {
+                    $d = $this->api->call('imopenlines.dialog.get', ['USER_CODE' => $userCode]);
+                    $res = $d['result'] ?? [];
+                    $resolved = (string)($res['dialog_id'] ?? (!empty($res['id']) ? 'chat' . $res['id'] : ''));
+                    if ($resolved !== '') {
+                        $dialogId = $resolved;
+                        $ucData = ['user_code' => $userCode, 'dialog_id' => $dialogId, 'checked_at' => time()];
+                        if ($cached) { $s->update('source_cursors', $cached, $ucData, 'done'); } else { $s->insert('source_cursors', $ucKey, $ucData, 'done'); }
+                    }
+                }
+                if ($dialogId !== '') {
+                    $this->registerOpenLineDialog($dialogId, $userCode);
+                    $found[$dialogId] = $userCode;
+                }
+            }
+        } catch (\Throwable $e) { $errors['openlines_crm'] = $e->getMessage(); }
+        foreach ($this->cases->store->all('cases', null) as $case) {
+            if ($case['status'] === 'RESOLVED') { continue; }
+            $dialogId = (string)($case['data']['dialog_id'] ?? '');
+            if ($dialogId === '') { continue; }
+            $cursor = $this->cases->store->get('source_cursors', 'openline_dialog:' . $dialogId);
+            $entityId = (string)($cursor['data']['entity_id'] ?? '');
+            if ($this->cases->policy->externalOpenLineAllowed($entityId)) {
+                $found[$dialogId] = $entityId;
+            }
+        }
+        return $found;
+    }
+    private function registerOpenLineDialog(string $dialogId, string $entityId): void
+    {
+        $s = $this->cases->store;
+        $key = 'openline_dialog:' . $dialogId;
+        $old = $s->get('source_cursors', $key);
+        $data = ['dialog_id' => $dialogId, 'entity_id' => $entityId, 'checked_at' => time()];
+        if ($old) { $s->update('source_cursors', $old, $data, 'done'); } else { $s->insert('source_cursors', $key, $data, 'done'); }
     }
 }

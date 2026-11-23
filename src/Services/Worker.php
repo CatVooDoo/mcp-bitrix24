@@ -231,7 +231,7 @@ class Worker
     }
     private function clientReply(array $a): array
     {
-        $this->cases->policy->external($a['dialog_id']); $this->cases->policy->capability('chat.send_external');
+        $this->cases->policy->external($a['dialog_id'],$this->cases->store); $this->cases->policy->capability('chat.send_external');
         return $this->chat->sendReply($a['dialog_id'],$a['message']);
     }
     private function internalReply(array $a): array

@@ -11,9 +11,22 @@ final class Policy
         if (empty($this->profile['portal_id'])) { throw new \RuntimeException('portal_id is required'); }
     }
     public function get(string $key, mixed $default = null): mixed { return $this->profile[$key] ?? $default; }
-    public function external(string $dialog): void
+    public function external(string $dialog, ?Store $store = null): void
     {
-        if (!in_array($dialog,$this->get('external_dialogs',[]),true)) { throw new \DomainException('External channel is not allowed'); }
+        if (in_array($dialog,$this->get('external_dialogs',[]),true)) { return; }
+        if ($store !== null) {
+            $cursor = $store->get('source_cursors', 'openline_dialog:' . $dialog);
+            if ($cursor && $this->externalOpenLineAllowed((string)($cursor['data']['entity_id'] ?? ''))) { return; }
+        }
+        throw new \DomainException('External channel is not allowed');
+    }
+    public function externalOpenLineAllowed(?string $entityId): bool
+    {
+        if ($entityId === null || $entityId === '') { return false; }
+        foreach ($this->get('external_openline_prefixes', []) as $prefix) {
+            if ($prefix !== '' && str_starts_with($entityId, (string)$prefix)) { return true; }
+        }
+        return false;
     }
     public function internal(string $dialog, int $employee): void
     {

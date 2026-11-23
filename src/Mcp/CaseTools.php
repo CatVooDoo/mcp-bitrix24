@@ -50,7 +50,7 @@ final class CaseTools
             case 'b24_apply_plan': return $cases->applyPlan($args['event_id'],$args['lease_token'],$args['expected_version'],['actions'=>$args['actions']]);
             case 'b24_resume_case': return ['success'=>true,'case'=>$cases->resume($args['case_id'],$args['expected_version'])];
             case 'b24_get_dialog_snapshot':
-                $cases->policy->external($args['dialog_id']); $cases->policy->capability('crm.read');
+                $cases->policy->external($args['dialog_id'],$cases->store); $cases->policy->capability('crm.read');
                 return (new DialogArchive($cases->policy))->dossier($args['dialog_id'],fn()=>(new CrmService())->getClientDossier(['chat_id'=>$args['dialog_id']]),$args['refresh'] ?? false);
             case 'b24_get_mail':
                 $cases->policy->capability('mail.read'); $cases->policy->mail($args['mailbox_id']);

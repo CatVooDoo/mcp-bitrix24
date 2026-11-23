@@ -63,10 +63,10 @@ final class McpRouter
         if (!$definition) { throw new \InvalidArgumentException('Unknown tool',-32602); }
         SchemaValidator::validate($args,$definition['inputSchema']);
         if (in_array($name,array_column($this->caseTools->getDefinitions(),'name'),true)) { return $this->format($this->caseTools->execute($name,$args)); }
-        $policy=Runtime::cases()->policy;
+        $cases=Runtime::cases(); $policy=$cases->policy;
         $policy->capability(str_contains($name,'task') || $name==='b24_get_workgroups' ? 'tasks.read' : (str_contains($name,'chat') || str_contains($name,'poll') ? 'chat.read' : 'crm.read'));
-        if (isset($args['dialog_id'])) { $policy->external((string)$args['dialog_id']); }
-        if (isset($args['chat_id'])) { $policy->external(str_starts_with((string)$args['chat_id'],'chat') ? (string)$args['chat_id'] : 'chat'.$args['chat_id']); }
+        if (isset($args['dialog_id'])) { $policy->external((string)$args['dialog_id'],$cases->store); }
+        if (isset($args['chat_id'])) { $policy->external(str_starts_with((string)$args['chat_id'],'chat') ? (string)$args['chat_id'] : 'chat'.$args['chat_id'],$cases->store); }
         if ($name==='b24_get_client_dossier' && !empty($args['chat_id'])) {
             return $this->format($this->caseTools->execute('b24_get_dialog_snapshot',['dialog_id'=>str_starts_with((string)$args['chat_id'],'chat') ? (string)$args['chat_id'] : 'chat'.$args['chat_id']]));
         }

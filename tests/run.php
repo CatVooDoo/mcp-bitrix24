@@ -196,6 +196,17 @@ $tests['internal comments are not public without explicit prefix']=function(){
     $api=new class extends BitrixClient { public function call(string $method,array $params=[]): array {return ['success'=>true,'result'=>[['POST_MESSAGE'=>'Internal secret']]];} };
     $r=(new TaskService($api))->getTaskComments(1,true);check(!$r['comments']);check((new ChatService())->normalizeDialogId('1650')==='1650');
 };
+$tests['openline prefix allows matching dialogs and rejects other lines']=function(){
+    global $profile; $p=$profile; $p['external_dialogs']=[]; $p['external_authors']=[]; $p['external_openline_prefixes']=['telegrambot|2|'];
+    $cases=fixture($p);
+    $rejected=$cases->ingest(['source'=>'chat','dialog_id'=>'chat17478','message_id'=>'1','author_id'=>1712,'text'=>'Old line 18','openline_entity_id'=>'wz_telegram_123|18|abc|1712']);
+    check($rejected['status']==='unmatched');
+    $accepted=$cases->ingest(['source'=>'chat','dialog_id'=>'chat1994','message_id'=>'2','author_id'=>380,'text'=>'Hello waydev_bot','openline_entity_id'=>'telegrambot|2|352465657|380']);
+    check($accepted['status']==='ready');
+    $cases->store->insert('source_cursors','openline_dialog:chat1994',['dialog_id'=>'chat1994','entity_id'=>'telegrambot|2|352465657|380'],'done');
+    $cases->policy->external('chat1994',$cases->store);
+    $denied=false; try{$cases->policy->external('chat17478',$cases->store);}catch(DomainException){$denied=true;} check($denied);
+};
 require __DIR__.'/gemini_test.php';
 require __DIR__.'/agy_test.php';
 require __DIR__.'/task_escalation_test.php';

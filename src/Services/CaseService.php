@@ -45,8 +45,9 @@ final class CaseService
                 return $this->store->update('inbox_events',$row,$event,$alreadyReplied ? 'done' : ($case['status'] === 'HUMAN_OWNED' ? 'ignored' : 'ready'));
             }
             $dialog = (string)$event['dialog_id'];
+            $openlineAllowed = $this->policy->externalOpenLineAllowed(isset($event['openline_entity_id']) ? (string)$event['openline_entity_id'] : null);
             if ($event['source'] === 'mail') { $this->policy->mail((int)($event['mailbox_id'] ?? 0)); }
-            elseif (!in_array($dialog,$this->policy->get('external_dialogs',[]),true)) {
+            elseif (!in_array($dialog,$this->policy->get('external_dialogs',[]),true) && !$openlineAllowed) {
                 // Uncorrelated employee traffic is retained, never treated as a customer question.
                 return $this->store->update('inbox_events',$row,$event,'unmatched');
             }
@@ -57,9 +58,12 @@ final class CaseService
                 return $this->store->update('inbox_events',$row,$event,'ignored');
             }
             if ($event['source'] !== 'mail') {
-                $allowed = $this->policy->get('external_authors',[])[$dialog] ?? [];
-                if (!$allowed || !in_array((int)$event['author_id'],$allowed,true)) {
-                    return $this->store->update('inbox_events',$row,$event,'unmatched');
+                $authorsMap = $this->policy->get('external_authors',[]);
+                if (!$openlineAllowed || isset($authorsMap[$dialog])) {
+                    $allowed = $authorsMap[$dialog] ?? [];
+                    if (!$allowed || !in_array((int)$event['author_id'],$allowed,true)) {
+                        return $this->store->update('inbox_events',$row,$event,'unmatched');
+                    }
                 }
             }
             // A resolved conversation starts a new issue; its old task and
