@@ -209,6 +209,16 @@ $tests['openline prefix allows matching dialogs and rejects other lines']=functi
     $p['initial_history']='new'; $c2=fixture($p); $api=new TestApi();
     $api->messages=[['id'=>10,'author_id'=>380,'text'=>'very old','date'=>date(DATE_ATOM,time()-86400)],['id'=>11,'author_id'=>380,'text'=>'just arrived','date'=>date(DATE_ATOM,time()-5)]];
     $m=new Monitor($c2,$api); check($m->dialog('chat1994',null,'telegrambot|2|352465657|380')===1);
+    $joinApi=new class extends BitrixClient {
+        public array $calls=[]; public int $adds=0;
+        public function call(string $method,array $params=[]): array {
+            $this->calls[]=$method;
+            if ($method==='im.message.add' && ++$this->adds===1) { return ['success'=>false,'error'=>'CANCELED','permanent'=>true]; }
+            return ['success'=>true,'result'=>$method==='im.message.add' ? 555 : true];
+        }
+    };
+    $sent=(new ChatService($joinApi))->sendReply('chat15870','Hello');
+    check($sent['success'] && $sent['message_id']===555 && $joinApi->calls===['im.message.add','imopenlines.operator.answer','im.message.add']);
 };
 require __DIR__.'/gemini_test.php';
 require __DIR__.'/agy_test.php';

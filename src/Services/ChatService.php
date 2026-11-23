@@ -125,6 +125,13 @@ class ChatService
             ], $options);
 
             $response = $this->client->call('im.message.add', $params);
+            if (!$response['success'] && ($response['error'] ?? '') === 'CANCELED'
+                && preg_match('/^chat(\d+)$/', $normalizedDialogId, $m)) {
+                $join = $this->client->call('imopenlines.operator.answer', ['CHAT_ID' => (int)$m[1]]);
+                if (!empty($join['success'])) {
+                    $response = $this->client->call('im.message.add', $params);
+                }
+            }
         }
 
         if (!$response['success']) {
