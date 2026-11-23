@@ -114,10 +114,16 @@ class TaskService
                 'error'   => $response['error'] ?? 'api_error',
                 'message' => $response['error_description'] ?? "Не удалось получить задачу #{$taskId}",
                 'task'    => null,
+                'uncertain' => $response['uncertain'] ?? false,
+                'permanent' => $response['permanent'] ?? false,
             ];
         }
 
         $task = $response['result']['task'] ?? null;
+        if (!is_array($task) || empty($task['id'] ?? $task['ID'] ?? null)) {
+            return ['success'=>false,'error'=>'task_unavailable','permanent'=>true,'task'=>null,
+                'message'=>'Задача отсутствует или недоступна текущему REST-пользователю'];
+        }
         if (is_array($task)) {
             $statusCode = isset($task['status']) ? (int)$task['status'] : 0;
             $task['statusText'] = self::STATUS_MAP[$statusCode] ?? "Неизвестный статус ({$statusCode})";
@@ -183,7 +189,7 @@ class TaskService
             $comment = is_array($rawComment) ? $rawComment : (array)$rawComment;
             $postMessage = (string)($comment['POST_MESSAGE'] ?? '');
 
-            $isPublic = true;
+            $isPublic = false;
             if ($publicPrefix !== '') {
                 $isPublic = str_starts_with(trim($postMessage), $publicPrefix);
             }
@@ -221,6 +227,9 @@ class TaskService
                 'success' => false,
                 'error'   => $response['error'] ?? 'api_error',
                 'message' => $response['error_description'] ?? 'Ошибка добавления комментария к задаче',
+                'uncertain' => $response['uncertain'] ?? false,
+                'request_not_sent' => $response['request_not_sent'] ?? false,
+                'permanent' => $response['permanent'] ?? false,
             ];
         }
 
@@ -340,6 +349,7 @@ class TaskService
             'results'      => $results,
             'comments'     => $comments,
             'chatMessages' => $chatMessages,
+            'status' => ($checklistData['success'] && $resultsData['success'] && $commentsData['success'] && (empty($chatId) || ($chatData['success'] ?? false))) ? 'complete' : 'partial',
         ];
     }
 
@@ -394,17 +404,17 @@ class TaskService
     public function createTask(array $data): array
     {
         // Постановщик всегда 612 (Валерия Богомолова) по регламенту компании
-        $data['created_by'] = self::TASK_CREATOR_ID;
+        $data['created_by'] = (int)(new \Bitrix24Mcp\Core\Policy())->get('task_creator_id', self::TASK_CREATOR_ID);
 
         // Исполнитель: если передан явно — используем его, иначе ответственный по умолчанию (882)
         if (empty($data['responsible_id'])) {
-            $data['responsible_id'] = self::DEFAULT_RESPONSIBLE_ID;
+            $data['responsible_id'] = (int)(new \Bitrix24Mcp\Core\Policy())->get('default_responsible_id', self::DEFAULT_RESPONSIBLE_ID);
         }
 
         // Наблюдатели: 1650 (Никита Минаев) и 1 (Андрей Акифьев) всегда входят в наблюдатели
         $data['auditors'] = array_values(array_unique(array_merge(
             array_map('intval', (array)($data['auditors'] ?? [])),
-            self::TASK_AUDITOR_IDS
+            (new \Bitrix24Mcp\Core\Policy())->get('task_auditor_ids', self::TASK_AUDITOR_IDS)
         )));
 
         // 1. Формирование названия задачи по регламенту
@@ -451,6 +461,10 @@ class TaskService
             ];
         }
 
+        if ($deadline !== '' && (!strtotime($deadline) || strtotime($deadline) <= time())) {
+            return ['success'=>false,'error'=>'invalid_deadline','message'=>'Deadline must be a valid future date'];
+        }
+
         // 6. Учет времени и предварительные трудозатраты (Обязательно!)
         $timeEstimateSeconds = $this->calculateTimeEstimateSeconds($data);
         if ($timeEstimateSeconds <= 0) {
@@ -487,7 +501,7 @@ class TaskService
             'TITLE'               => $title,
             'DESCRIPTION'         => $description,
             'RESPONSIBLE_ID'      => $responsibleId,
-            'CREATED_BY'          => self::TASK_CREATOR_ID,
+            'CREATED_BY'          => $data['created_by'],
             'GROUP_ID'            => $groupId,
             'TAGS'                => $tags,
             'ALLOW_TIME_TRACKING' => 'Y',
@@ -532,6 +546,9 @@ class TaskService
                 'success' => false,
                 'error'   => $response['error'] ?? 'api_error',
                 'message' => $response['error_description'] ?? 'Ошибка при создании задачи в Битрикс24',
+                'uncertain' => $response['uncertain'] ?? false,
+                'request_not_sent' => $response['request_not_sent'] ?? false,
+                'permanent' => $response['permanent'] ?? false,
             ];
         }
 
@@ -632,12 +649,12 @@ class TaskService
         $trimmed = mb_strtolower(trim($name));
         foreach ($res['groups'] as $group) {
             $groupName = mb_strtolower((string)($group['NAME'] ?? ''));
-            if ($groupName === $trimmed || mb_strpos($groupName, $trimmed) !== false) {
+            if ($groupName === $trimmed) {
                 return (int)$group['ID'];
             }
         }
 
-        return (int)($res['groups'][0]['ID'] ?? 0);
+        return 0; // Ambiguous or partial matches require explicit selection.
     }
 
     /**

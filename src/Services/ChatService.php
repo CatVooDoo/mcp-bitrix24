@@ -30,7 +30,7 @@ class ChatService
 
         $response = $this->client->call('im.dialog.messages.get', [
             'DIALOG_ID' => $normalizedDialogId,
-            'LIMIT'     => $limit,
+            'LIMIT'     => max(1, min(50, $limit)),
         ]);
 
         if (!$response['success']) {
@@ -136,6 +136,10 @@ class ChatService
                 'success' => false,
                 'error'   => $response['error'] ?? 'api_error',
                 'message' => $response['error_description'] ?? 'Ошибка при отправке сообщения в чат',
+                'uncertain' => $response['uncertain'] ?? false,
+                'request_not_sent' => $response['request_not_sent'] ?? false,
+                'permanent' => $response['permanent'] ?? false,
+                'http_status' => $response['http_status'] ?? null,
             ];
         }
 
@@ -198,11 +202,9 @@ class ChatService
         $normalizedDialogId = $this->normalizeDialogId($dialogId);
         $chatId = $this->extractChatId($normalizedDialogId);
 
-        // 1. Если передана сводка, публикуем внутреннюю системную заметку для оператора
         if ($summaryNote !== '') {
-            $this->sendReply($normalizedDialogId, "🤖 [Сводка ИИ для оператора]:\n" . $summaryNote, [
-                'SYSTEM' => 'Y',
-            ]);
+            return ['success'=>false,'error'=>'internal_note_requires_private_channel',
+                'message'=>'Use a case employee request or a linked task for internal notes.'];
         }
 
         // 2. Вызов перевода диалога на оператора
@@ -250,7 +252,7 @@ class ChatService
         $strId = trim((string)$dialogId);
 
         if (is_numeric($strId)) {
-            return 'chat' . $strId;
+            return $strId;
         }
 
         return $strId;

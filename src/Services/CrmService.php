@@ -632,6 +632,7 @@ class CrmService
 
         $batchResponse = $this->client->callBatch($batch);
         $results = $batchResponse['result'] ?? [];
+        $readStatus = !empty($batchResponse['success']) ? 'complete' : ($results ? 'partial' : 'unavailable');
 
         // Декорация статусов задач
         $tasksList = [];
@@ -652,7 +653,10 @@ class CrmService
         $contractsList = $results['contracts']['items'] ?? ($results['contracts'] ?? []);
 
         return [
-            'success' => true,
+            'success' => $readStatus === 'complete',
+            'status' => $readStatus,
+            'errors' => $batchResponse['result_error'] ?? ($batchResponse['error'] ?? null),
+            'fetched_at' => time(),
             'dossier' => [
                 'contact'   => $results['contact'] ?? null,
                 'company'   => $results['company'] ?? null,
