@@ -1,173 +1,37 @@
 <?php
-
 declare(strict_types=1);
-
 namespace Bitrix24Mcp\Core;
 
-/**
- * Обертка над методами CRest::call и CRest::callBatch с нормализацией ответов и ошибок.
- */
+/** Timed webhook REST transport. No write is automatically replayed after a timeout. */
 class BitrixClient
 {
-    /**
-     * Вызов единичного метода Bitrix24 REST API.
-     *
-     * @param string $method Имя метода (например, 'crm.lead.get')
-     * @param array $params Параметры запроса
-     * @return array Нормализованный массив с ключами 'success', 'result', 'error', 'total', 'next'
-     */
-    public function call(string $method, array $params = []): array
+    public function __construct(private readonly HttpClient $http=new HttpClient()) {}
+    public function call(string $method,array $params=[]): array
     {
-        if (!class_exists('\CRest')) {
-            Logger::error('CRest class is not loaded', ['method' => $method], 'bitrix_api');
-            return [
-                'success'           => false,
-                'error'             => 'crest_not_loaded',
-                'error_description' => 'Класс CRest не найден. Проверьте установку библиотеки crest.php.',
-                'result'            => null,
-            ];
-        }
-
-        try {
-            $rawResponse = \CRest::call($method, $params);
-            return $this->normalizeResponse($method, $params, $rawResponse);
-        } catch (\Throwable $e) {
-            Logger::error("Bitrix API Exception in {$method}: " . $e->getMessage(), [
-                'method' => $method,
-                'params' => $params,
-                'trace'  => $e->getTraceAsString(),
-            ], 'bitrix_api');
-
-            return [
-                'success'           => false,
-                'error'             => 'exception',
-                'error_description' => $e->getMessage(),
-                'result'            => null,
-            ];
-        }
+        if (!preg_match('/^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)*$/',$method)) { throw new \InvalidArgumentException('Invalid REST method'); }
+        $base=defined('C_REST_WEB_HOOK_URL') ? (string)C_REST_WEB_HOOK_URL : Env::get('C_REST_WEB_HOOK_URL');
+        if ($base==='') { return ['success'=>false,'error'=>'webhook_not_configured','permanent'=>true,'result'=>null]; }
+        $r=$this->http->request(rtrim($base,'/').'/'.$method.'.json',$params);
+        if (!$r['success']) { return $r+['result'=>null]; }
+        $raw=$r['result'];
+        return ['success'=>true,'result'=>$raw['result'] ?? null,'total'=>$raw['total'] ?? null,
+            'next'=>$raw['next'] ?? null,'time'=>$raw['time'] ?? null,'error'=>null,'error_description'=>null];
     }
-
-    /**
-     * Вызов пакетного метода Bitrix24 REST API (CRest::callBatch).
-     *
-     * @param array $batch Ассоциативный массив запросов вида ['cmd_name' => 'method?param=value' или ['method', [params]]]
-     * @param int $halt Прерывать ли выполнение пакета при ошибке (0 или 1)
-     * @return array Нормализованный ответ батча
-     */
-    public function callBatch(array $batch, int $halt = 0): array
+    public function callBatch(array $batch,int $halt=0): array
     {
-        if (!class_exists('\CRest')) {
-            Logger::error('CRest class is not loaded for batch', [], 'bitrix_api');
-            return [
-                'success'           => false,
-                'error'             => 'crest_not_loaded',
-                'error_description' => 'Класс CRest не найден при пакетном запросе.',
-                'result'            => null,
-            ];
-        }
-
-        try {
-            $rawResponse = \CRest::callBatch($batch, $halt);
-
-            if (!is_array($rawResponse)) {
-                Logger::error('Invalid batch response format from Bitrix24', ['raw' => $rawResponse], 'bitrix_api');
-                return [
-                    'success'           => false,
-                    'error'             => 'invalid_response',
-                    'error_description' => 'Некорректный формат ответа пакетного запроса от Битрикс24.',
-                    'result'            => null,
-                ];
+        $results=[]; $errors=[];
+        foreach (array_chunk($batch,50,true) as $chunk) {
+            $commands=[];
+            foreach ($chunk as $key=>$command) {
+                if (!is_array($command) || empty($command['method'])) { throw new \InvalidArgumentException('Batch command must contain method and params'); }
+                $commands[$key]=$command['method'].(!empty($command['params']) ? '?'.http_build_query($command['params']) : '');
             }
-
-            if (!empty($rawResponse['error'])) {
-                $errorDesc = $rawResponse['error_description'] 
-                    ?? $rawResponse['error_information'] 
-                    ?? (is_string($rawResponse['error']) ? $rawResponse['error'] : 'Ошибка API Битрикс24');
-
-                Logger::warning('Batch request completed with error', [
-                    'error'             => $rawResponse['error'],
-                    'error_description' => $errorDesc,
-                ], 'bitrix_api');
-
-                return [
-                    'success'           => false,
-                    'error'             => $rawResponse['error'],
-                    'error_description' => $errorDesc,
-                    'result'            => $rawResponse['result']['result'] ?? null,
-                    'result_error'      => $rawResponse['result']['result_error'] ?? null,
-                    'raw'               => $rawResponse,
-                ];
-            }
-
-            // Успешный батч
-            $batchResult = $rawResponse['result']['result'] ?? ($rawResponse['result'] ?? []);
-            $batchErrors = $rawResponse['result']['result_error'] ?? [];
-
-            return [
-                'success'      => empty($batchErrors),
-                'result'       => $batchResult,
-                'result_error' => $batchErrors,
-                'raw'          => $rawResponse,
-            ];
-        } catch (\Throwable $e) {
-            Logger::error('Bitrix API Batch Exception: ' . $e->getMessage(), [
-                'batch_keys' => array_keys($batch),
-                'trace'      => $e->getTraceAsString(),
-            ], 'bitrix_api');
-
-            return [
-                'success'           => false,
-                'error'             => 'exception',
-                'error_description' => $e->getMessage(),
-                'result'            => null,
-            ];
+            $r=$this->call('batch',['halt'=>$halt,'cmd'=>$commands]);
+            if (!$r['success']) { return array_merge($r,['result'=>$results,'result_error'=>$errors,'partial'=>!empty($results)]); }
+            $results=array_merge($results,$r['result']['result'] ?? []);
+            $errors=array_merge($errors,$r['result']['result_error'] ?? []);
+            if ($halt && $errors) { break; }
         }
-    }
-
-    /**
-     * Нормализация ответа API Битрикс24.
-     */
-    private function normalizeResponse(string $method, array $params, mixed $raw): array
-    {
-        if (!is_array($raw)) {
-            Logger::error("Non-array response from Bitrix24 for {$method}", ['raw' => $raw], 'bitrix_api');
-            return [
-                'success'           => false,
-                'error'             => 'invalid_response',
-                'error_description' => 'Битрикс24 вернул некорректный ответ (не JSON/array).',
-                'result'            => null,
-            ];
-        }
-
-        if (!empty($raw['error'])) {
-            $errorDesc = $raw['error_description'] 
-                ?? $raw['error_information'] 
-                ?? (is_string($raw['error']) ? $raw['error'] : 'Ошибка API Битрикс24');
-
-            Logger::warning("Bitrix API error in {$method}: {$errorDesc}", [
-                'method' => $method,
-                'params' => $params,
-                'error'  => $raw['error'],
-            ], 'bitrix_api');
-
-            return [
-                'success'           => false,
-                'error'             => $raw['error'],
-                'error_description' => $errorDesc,
-                'result'            => null,
-                'raw'               => $raw,
-            ];
-        }
-
-        return [
-            'success'           => true,
-            'result'            => $raw['result'] ?? null,
-            'total'             => $raw['total'] ?? null,
-            'next'              => $raw['next'] ?? null,
-            'time'              => $raw['time'] ?? null,
-            'error'             => null,
-            'error_description' => null,
-            'raw'               => $raw,
-        ];
+        return ['success'=>!$errors,'result'=>$results,'result_error'=>$errors];
     }
 }

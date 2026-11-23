@@ -1,0 +1,8 @@
+{
+  "name": "local/bitrix24-mcp",
+  "description": "Durable Bitrix24 support runtime and MCP server",
+  "type": "project",
+  "require": {"php": ">=8.1", "ext-pdo": "*", "ext-curl": "*", "ext-json": "*", "ext-mbstring": "*"},
+  "autoload": {"psr-4": {"Bitrix24Mcp\\": "src/"}},
+  "scripts": {"test": "php tests/run.php"}
+}

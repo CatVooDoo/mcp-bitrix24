@@ -1,69 +1,23 @@
 <?php
-//define('C_REST_CLIENT_ID','local.5c8bb1b0891cf2.87252039');//Application ID
-//define('C_REST_CLIENT_SECRET','SakeVG5mbRdcQet45UUrt6q72AMTo7fkwXSO7Y5LYFYNCRsA6f');//Application key
-// or
-//define('C_REST_WEB_HOOK_URL','https://rest-api.bitrix24.com/rest/1/doutwqkjxgc3mgc1/');//url on creat Webhook
-
-//define('C_REST_CURRENT_ENCODING','windows-1251');
-//define('C_REST_IGNORE_SSL',true);//turn off validate ssl by curl
-//define('C_REST_LOG_TYPE_DUMP',true); //logs save var_export for viewing convenience
-//define('C_REST_BLOCK_LOG',true);//turn off default logs
-//define('C_REST_LOGS_DIR', __DIR__ .'/logs/'); //directory path to save the log
-
-// --- CRest Standard Constants Configuration ---
-if (!defined('C_REST_WEB_HOOK_URL')) {
-    define('C_REST_WEB_HOOK_URL', getenv('C_REST_WEB_HOOK_URL') ?: 'https://waydev.bitrix24.ru/rest/1650/cama2nfu87w0m3w7/');
+declare(strict_types=1);
+// Environment always wins. Existing local credentials are retained in an ignored private file.
+$secretFile = getenv('B24_SECRETS_FILE') ?: __DIR__ . '/config/secrets.local.json';
+$localSecrets = is_file($secretFile) ? json_decode((string)file_get_contents($secretFile), true, 512, JSON_THROW_ON_ERROR) : [];
+$defaults = [
+    'C_REST_CLIENT_ID'=>'', 'C_REST_CLIENT_SECRET'=>'', 'C_REST_WEB_HOOK_URL'=>'',
+    'C_REST_BLOCK_LOG'=>true, 'C_REST_LOG_TYPE_DUMP'=>false,
+    'C_REST_LOGS_DIR'=>__DIR__.'/logs/crest/', 'C_REST_IGNORE_SSL'=>false,
+    'B24_OUTGOING_WEBHOOK_TOKEN'=>'', 'MCP_HTTP_AUTH_TOKEN'=>'',
+    'B24_BOT_ID'=>0, 'B24_BOT_CLIENT_ID'=>'', 'B24_CONTRACTS_ENTITY_TYPE_ID'=>0,
+    'B24_PUBLIC_COMMENT_PREFIX'=>'[Публично]', 'B24_DEBOUNCE_SECONDS'=>0,
+    'B24_ENABLE_PM_AGENT_TOOLS'=>false, 'OPENCLAW_GATEWAY_URL'=>'', 'OPENCLAW_HOOK_TOKEN'=>''
+];
+foreach ($defaults as $key=>$default) {
+    if (defined($key)) { continue; }
+    $env = getenv($key);
+    $value = $env === false ? ($localSecrets[$key] ?? $default) : $env;
+    if (is_bool($default)) { $value = filter_var($value, FILTER_VALIDATE_BOOLEAN); }
+    elseif (is_int($default)) { $value = (int)$value; }
+    define($key, $value);
 }
-if (!defined('C_REST_BLOCK_LOG')) {
-    define('C_REST_BLOCK_LOG', true); // Turn off default CRest stdout/file dump to avoid MCP pollution
-}
-if (!defined('C_REST_LOGS_DIR')) {
-    define('C_REST_LOGS_DIR', __DIR__ . '/logs/crest/');
-}
-if (!defined('C_REST_IGNORE_SSL')) {
-    $ignoreSsl = getenv('C_REST_IGNORE_SSL');
-    define('C_REST_IGNORE_SSL', $ignoreSsl !== false ? filter_var($ignoreSsl, FILTER_VALIDATE_BOOLEAN) : true);
-}
-
-// --- Bitrix24 MCP Gateway & Webhook Constants ---
-if (!defined('B24_OUTGOING_WEBHOOK_TOKEN')) {
-    define('B24_OUTGOING_WEBHOOK_TOKEN', getenv('B24_OUTGOING_WEBHOOK_TOKEN') ?: '');
-}
-
-if (!defined('B24_BOT_ID')) {
-    define('B24_BOT_ID', (int)(getenv('B24_BOT_ID') ?: 0));
-}
-
-if (!defined('B24_BOT_CLIENT_ID')) {
-    define('B24_BOT_CLIENT_ID', getenv('B24_BOT_CLIENT_ID') ?: '');
-}
-
-if (!defined('B24_CONTRACTS_ENTITY_TYPE_ID')) {
-    define('B24_CONTRACTS_ENTITY_TYPE_ID', (int)(getenv('B24_CONTRACTS_ENTITY_TYPE_ID') ?: 0));
-}
-
-if (!defined('B24_PUBLIC_COMMENT_PREFIX')) {
-    $envPrefix = getenv('B24_PUBLIC_COMMENT_PREFIX');
-    define('B24_PUBLIC_COMMENT_PREFIX', $envPrefix !== false ? $envPrefix : '');
-}
-
-if (!defined('OPENCLAW_GATEWAY_URL')) {
-    define('OPENCLAW_GATEWAY_URL', getenv('OPENCLAW_GATEWAY_URL') ?: 'http://127.0.0.1:19001/hooks/agent');
-}
-
-if (!defined('OPENCLAW_HOOK_TOKEN')) {
-    define('OPENCLAW_HOOK_TOKEN', getenv('OPENCLAW_HOOK_TOKEN') ?: '');
-}
-
-if (!defined('MCP_HTTP_AUTH_TOKEN')) {
-    define('MCP_HTTP_AUTH_TOKEN', getenv('MCP_HTTP_AUTH_TOKEN') ?: '');
-}
-
-if (!defined('B24_DEBOUNCE_SECONDS')) {
-    define('B24_DEBOUNCE_SECONDS', (int)(getenv('B24_DEBOUNCE_SECONDS') ?: 0));
-}
-
-if (!defined('B24_ENABLE_PM_AGENT_TOOLS')) {
-    $enablePm = getenv('B24_ENABLE_PM_AGENT_TOOLS');
-    define('B24_ENABLE_PM_AGENT_TOOLS', $enablePm !== false ? filter_var($enablePm, FILTER_VALIDATE_BOOLEAN) : false);
-}
+unset($localSecrets, $secretFile, $defaults, $key, $value, $default, $env);

@@ -8,3 +8,8 @@
 !/logs/crest/.gitkeep
 *.log
 .DS_Store
+
+/var/
+/config/secrets.local.json
+__pycache__/
+*.pyc

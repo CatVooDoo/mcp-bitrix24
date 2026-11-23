@@ -27,13 +27,13 @@ class Bootstrap
         error_reporting(E_ALL);
 
         $rootDir = dirname(__DIR__, 2);
-        $logsDir = $rootDir . '/logs';
+        $logsDir = getenv('B24_LOG_DIR') ?: ((getenv('B24_DATA_DIR') ?: $rootDir . '/var') . '/logs');
         $errorLogFile = $logsDir . '/mcp_error.log';
 
         // Создание необходимых директорий
         foreach ([$logsDir, $logsDir . '/cache', $logsDir . '/crest'] as $dir) {
             if (!is_dir($dir)) {
-                @mkdir($dir, 0775, true);
+                @mkdir($dir, 0700, true);
             }
         }
 
