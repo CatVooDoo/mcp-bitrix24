@@ -1,6 +1,9 @@
 <?php
 
 declare(strict_types=1);
+if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+if (getenv('B24_ENABLE_LEGACY_WORKERS') !== 'true') { fwrite(STDERR, "Legacy worker disabled. Use php bin/console.php worker.\n"); exit(1); }
+
 
 /**
  * Высокоточный контекстный автоответчик для Открытой линии 18 ("Открытая Линия Telegram (Wazzup)").
@@ -219,7 +222,7 @@ class Line18AutoResponder
         $internalNote = $result['internal_note'];
 
         // Отправка скрытой сводки с тегом оператора
-        $this->chatService->sendReply($dialogId, $internalNote, ['SYSTEM' => 'Y']);
+        // Internal notes stay in the linked task; SYSTEM is not a privacy boundary.
 
         // Отправка публичного ответа клиенту
         $sendRes = $this->chatService->sendReply($dialogId, $publicReply);

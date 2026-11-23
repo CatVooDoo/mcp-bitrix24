@@ -56,26 +56,8 @@ if ($isCli) {
     // Режим HTTP
     header('Content-Type: application/json; charset=utf-8');
 
-    // Проверка токена авторизации (если задан MCP_HTTP_AUTH_TOKEN)
-    $requiredToken = defined('MCP_HTTP_AUTH_TOKEN') ? (string)MCP_HTTP_AUTH_TOKEN : '';
-    if ($requiredToken !== '') {
-        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
-        $queryToken = (string)($_GET['token'] ?? '');
-
-        $providedToken = '';
-        if (str_starts_with($authHeader, 'Bearer ')) {
-            $providedToken = trim(substr($authHeader, 7));
-        } elseif ($queryToken !== '') {
-            $providedToken = $queryToken;
-        }
-
-        if (!hash_equals($requiredToken, $providedToken)) {
-            http_response_code(403);
-            echo json_encode(['error' => 'forbidden', 'message' => 'Неверный токен авторизации (MCP_HTTP_AUTH_TOKEN)']);
-            exit;
-        }
-    }
-
+    \Bitrix24Mcp\Core\HttpGuard::origin();
+    \Bitrix24Mcp\Core\HttpGuard::bearer();
     $forward = !empty($_GET['forward']) || !empty($_POST['forward']);
     $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 30;
     $onlyOpenlines = empty($_GET['all']) && empty($_POST['all']);

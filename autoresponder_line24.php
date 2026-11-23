@@ -1,6 +1,9 @@
 <?php
 
 declare(strict_types=1);
+if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+if (getenv('B24_ENABLE_LEGACY_WORKERS') !== 'true') { fwrite(STDERR, "Legacy worker disabled. Use php bin/console.php worker.\n"); exit(1); }
+
 
 /**
  * Автоматический фоновый автоответчик для Открытой линии 24 ("ТЕСТ AI АГЕНТА ЧАТ С КЛИЕНТАМИ").
@@ -39,7 +42,7 @@ class Line24AutoResponder
         private readonly CrmService $crmService = new CrmService(),
         private readonly ContractService $contractService = new ContractService()
     ) {
-        $this->stateFile = dirname(__DIR__) . '/openclaw bitrix/logs/cache/autoresponder_line24_state.json';
+        $this->stateFile = __DIR__ . '/logs/cache/autoresponder_line24_state.json';
         $this->loadState();
     }
 
@@ -200,9 +203,7 @@ class Line24AutoResponder
 
         // 5. Отправка скрытой заметки в чат с тегом ответственного (SYSTEM => 'Y')
         // Тег ответственного обязателен, чтобы сотруднику пришел пуш/колокольчик
-        $hiddenRes = $this->chatService->sendReply($dialogId, $internalNote, [
-            'SYSTEM' => 'Y',
-        ]);
+        $hiddenRes = ['success' => false]; // Never publish internal notes in the client channel.
         if ($hiddenRes['success']) {
             echo "[" . date('Y-m-d H:i:s') . "] Отправлена скрытая сводка оператору в {$dialogId} с тегом [USER=" . self::OPERATOR_USER_ID . "]\n";
         }

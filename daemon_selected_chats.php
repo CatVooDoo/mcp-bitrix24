@@ -1,6 +1,9 @@
 <?php
 
 declare(strict_types=1);
+if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
+if (getenv('B24_ENABLE_LEGACY_WORKERS') !== 'true') { fwrite(STDERR, "Legacy worker disabled. Use php bin/console.php worker.\n"); exit(1); }
+
 require_once __DIR__ . '/src/Core/Bootstrap.php';
 
 use Bitrix24Mcp\Core\Bootstrap;
