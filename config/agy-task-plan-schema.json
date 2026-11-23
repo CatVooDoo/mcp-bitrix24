@@ -1,0 +1,55 @@
+{
+  "type": "object",
+  "properties": {
+    "actions": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "reply",
+              "task",
+              "resolve",
+              "handoff"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "employee_id": {
+            "type": "integer"
+          },
+          "dialog_id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "actions"
+  ],
+  "additionalProperties": false
+}

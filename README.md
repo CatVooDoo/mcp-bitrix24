@@ -1,5 +1,7 @@
 # Bitrix24 CRest MCP Server & Webhook Gateway для OpenClaw
 
+Подключение Gemini CLI и проверка без отправки сообщений: [GEMINI_SETUP.md](GEMINI_SETUP.md).
+
 Легковесный, высокопроизводительный шлюз и MCP-сервер (Model Context Protocol) на **PHP 8.1+** с официальной библиотекой **[CRest](https://github.com/bitrix-tools/crest)** для интеграции ИИ-агента **OpenClaw (DeepSeek V4.1 Flash)** с порталом **Битрикс24**.
 
 Архитектура проекта спроектирована с четким разделением на этапы развития:

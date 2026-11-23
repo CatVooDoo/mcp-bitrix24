@@ -1,0 +1,10 @@
+{
+  "portal_id":"container-test",
+  "external_dialogs":["chat1","chat2"],
+  "external_authors":{"chat1":[10],"chat2":[20]},
+  "internal_dialogs":[],"employee_ids":[1650,882,612,1],"actor_id":99,
+  "mailbox_ids":[],"task_ids":[],"task_creator_id":612,"task_auditor_ids":[1650,1],
+  "default_responsible_id":882,
+  "capabilities":["crm.read","chat.read","chat.send_external","chat.send_internal","tasks.read","tasks.create","tasks.comment"],
+  "initial_history":"new","employee_timeout_seconds":3600,"max_reminders":2
+}

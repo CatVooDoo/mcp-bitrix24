@@ -1,0 +1,10 @@
+{
+  "tools": {"core": []},
+  "mcp": {"allowed": ["__b24_no_mcp_servers__"]},
+  "skills": {"enabled": false},
+  "hooksConfig": {"enabled": false},
+  "model": {"maxSessionTurns": 1},
+  "telemetry": {"enabled": false, "logPrompts": false},
+  "context": {"fileName": "B24_NO_CONTEXT.md", "discoveryMaxDirs": 0},
+  "general": {"enableAutoUpdate": false}
+}
