@@ -57,16 +57,18 @@ class Monitor
         // Internal waits may predate this monitor's first pass: never skip an answer to an active request.
         $activeWait=false;
         foreach ($s->all('employee_requests','waiting') as $req) { if ($req['data']['dialog_id']===$dialog) { $activeWait=true; break; } }
-        if (!$initialNew || $activeWait || $taskId!==null) {
-            foreach ($messages as $m) {
-                $system=in_array($m['system'] ?? $m['params']['SYSTEM'] ?? false,[true,1,'1','Y'],true);
-                $event=['source'=>'chat','dialog_id'=>$dialog,'message_id'=>(string)$m['id'],
-                    'author_id'=>(int)($m['author_id'] ?? 0),'text'=>(string)($m['text'] ?? ''),
-                    'occurred_at'=>strtotime((string)($m['date'] ?? '')) ?: time(),'reply_to'=>$m['reply_id'] ?? $m['params']['REPLY_ID'] ?? null,'files'=>$m['params']['FILE_ID'] ?? [],'system'=>$system,'task_id'=>$taskId];
-                if ($openlineEntityId!==null) { $event['openline_entity_id']=$openlineEntityId; }
-                $this->cases->ingest($event);
-                $count++;
-            }
+        $freshCutoff = time() - 120;
+        foreach ($messages as $m) {
+            $occurredAt = !empty($m['date']) ? (strtotime((string)$m['date']) ?: 0) : 0;
+            $isFreshOpenLine = $openlineEntityId !== null && $occurredAt >= $freshCutoff;
+            if ($initialNew && !$activeWait && $taskId===null && !$isFreshOpenLine) { continue; }
+            $system=in_array($m['system'] ?? $m['params']['SYSTEM'] ?? false,[true,1,'1','Y'],true);
+            $event=['source'=>'chat','dialog_id'=>$dialog,'message_id'=>(string)$m['id'],
+                'author_id'=>(int)($m['author_id'] ?? 0),'text'=>(string)($m['text'] ?? ''),
+                'occurred_at'=>$occurredAt ?: time(),'reply_to'=>$m['reply_id'] ?? $m['params']['REPLY_ID'] ?? null,'files'=>$m['params']['FILE_ID'] ?? [],'system'=>$system,'task_id'=>$taskId];
+            if ($openlineEntityId!==null) { $event['openline_entity_id']=$openlineEntityId; }
+            $this->cases->ingest($event);
+            $count++;
         }
         $data=['dialog_id'=>$dialog,'message_id'=>$latest,'checked_at'=>time()];
         if ($cursor) { $s->update('source_cursors',$cursor,$data,'done'); } else { $s->insert('source_cursors',$key,$data,'done'); }

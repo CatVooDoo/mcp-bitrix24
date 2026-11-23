@@ -206,6 +206,9 @@ $tests['openline prefix allows matching dialogs and rejects other lines']=functi
     $cases->store->insert('source_cursors','openline_dialog:chat1994',['dialog_id'=>'chat1994','entity_id'=>'telegrambot|2|352465657|380'],'done');
     $cases->policy->external('chat1994',$cases->store);
     $denied=false; try{$cases->policy->external('chat17478',$cases->store);}catch(DomainException){$denied=true;} check($denied);
+    $p['initial_history']='new'; $c2=fixture($p); $api=new TestApi();
+    $api->messages=[['id'=>10,'author_id'=>380,'text'=>'very old','date'=>date(DATE_ATOM,time()-86400)],['id'=>11,'author_id'=>380,'text'=>'just arrived','date'=>date(DATE_ATOM,time()-5)]];
+    $m=new Monitor($c2,$api); check($m->dialog('chat1994',null,'telegrambot|2|352465657|380')===1);
 };
 require __DIR__.'/gemini_test.php';
 require __DIR__.'/agy_test.php';
