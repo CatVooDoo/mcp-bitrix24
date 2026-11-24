@@ -24,7 +24,7 @@ final class Policy
     {
         if ($entityId === null || $entityId === '') { return false; }
         foreach ($this->get('external_openline_prefixes', []) as $prefix) {
-            if ($prefix !== '' && str_starts_with($entityId, (string)$prefix)) { return true; }
+            if ($prefix === '*' || ($prefix !== '' && str_starts_with($entityId, (string)$prefix))) { return true; }
         }
         return false;
     }
