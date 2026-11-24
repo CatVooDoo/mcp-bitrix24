@@ -181,7 +181,7 @@ class Monitor
         } catch (\Throwable $e) { $errors['openlines_recent'] = $e->getMessage(); }
         try {
             $acts = $this->api->call('crm.activity.list', [
-                'order' => ['ID' => 'DESC'],
+                'order' => ['LAST_UPDATED' => 'DESC'],
                 'filter' => ['PROVIDER_ID' => 'IMOPENLINES_SESSION'],
                 'select' => ['ID', 'PROVIDER_PARAMS'],
             ]);
