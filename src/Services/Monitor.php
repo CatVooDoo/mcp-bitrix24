@@ -208,13 +208,11 @@ class Monitor
                 }
             }
         } catch (\Throwable $e) { $errors['openlines_crm'] = $e->getMessage(); }
-        foreach ($this->cases->store->all('cases', null) as $case) {
-            if ($case['status'] === 'RESOLVED') { continue; }
-            $dialogId = (string)($case['data']['dialog_id'] ?? '');
-            if ($dialogId === '') { continue; }
-            $cursor = $this->cases->store->get('source_cursors', 'openline_dialog:' . $dialogId);
-            $entityId = (string)($cursor['data']['entity_id'] ?? '');
-            if ($this->cases->policy->externalOpenLineAllowed($entityId)) {
+        foreach ($this->cases->store->all('source_cursors', null) as $c) {
+            if (!str_starts_with((string)$c['id'], 'openline_dialog:')) { continue; }
+            $dialogId = (string)($c['data']['dialog_id'] ?? '');
+            $entityId = (string)($c['data']['entity_id'] ?? '');
+            if ($dialogId !== '' && $this->cases->policy->externalOpenLineAllowed($entityId)) {
                 $found[$dialogId] = $entityId;
             }
         }
