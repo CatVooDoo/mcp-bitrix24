@@ -16,6 +16,8 @@ class AgentAdapter
         $context['instructions'].="\nAuthoritative owner rules:\n".SupportKnowledge::rules();
         if (($context['policy']['escalation_channel'] ?? '')==='task') {
             $context['instructions'].="\nWhen human escalation is necessary, use a task action, never ask_employee or direct messages. First answer from verified facts or ask the customer one specific clarification if their identity/project/request is unclear. Do not create a task solely for missing client identity or project name. New tasks use assignee 882, creator 612 and auditors 1650 and 1. Use a verified project only, otherwise the internal WAYDEV.RU group. The initial estimate and deadline cover triage/feedback, not implementation. The server confirms the actual task ID after success; do not add a separate reply to a task plan. Follow-up task actions append to the linked task. Convey sufficient staff answers directly to the customer and cite the request; otherwise ask a precise follow-up inside the task. Do not revive unrelated old work.";
+        } else {
+            $context['instructions'].="\nFor simple questions or quick clarifications from a manager (e.g. status, simple fact, quick confirmation), use ask_employee (direct message to employee_id, default 882) instead of creating a task, and send the answer to the client once the manager replies. Use task only for actual work items, bugs, or multi-step requests.";
         }
         if (Env::get('B24_AGENT_PROVIDER')==='gemini') { return (new GeminiAdapter())->plan($context); }
         if (Env::get('B24_AGENT_PROVIDER')==='agy') { return (new AgyAdapter())->plan($context); }

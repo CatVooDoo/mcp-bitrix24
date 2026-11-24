@@ -28,11 +28,12 @@
     "tasks.comment",
     "chat.read",
     "chat.send_external",
+    "chat.send_internal",
     "mail.read",
     "mail.reply"
   ],
   "initial_history": "new",
   "employee_timeout_seconds": 3600,
   "max_reminders": 3,
-  "escalation_channel": "task"
+  "escalation_channel": "both"
 }
